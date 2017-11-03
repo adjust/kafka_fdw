@@ -1,22 +1,22 @@
 sudo: required
 addons:
-   postgresql: 
+   postgresql:
         - "9.4"
         - "9.5"
         - "9.6"
 matrix:
    include:
-     - addons: 
-          postgresql: 9.4
-       install:
-           - sudo apt-get install postgresql-server-dev-9.4
-           - sudo make install
-     - addons: 
-          postgresql: 9.5
-       install:
-           - sudo apt-get install postgresql-server-dev-9.5
-           - sudo make install
-     - addons: 
+     # - addons:
+     #      postgresql: 9.4
+     #   install:
+     #       - sudo apt-get install postgresql-server-dev-9.4
+     #       - sudo make install
+     # - addons:
+     #      postgresql: 9.5
+     #   install:
+     #       - sudo apt-get install postgresql-server-dev-9.5
+     #       - sudo make install
+     - addons:
           postgresql: 9.6
        install:
            - sudo apt-get install postgresql-server-dev-9.6
@@ -27,10 +27,14 @@ before_install:
   - mkdir -p kafka && tar xzf kafka.tgz -C kafka --strip-components 1
   - nohup bash -c "cd kafka && bin/zookeeper-server-start.sh config/zookeeper.properties &"
   - nohup bash -c "cd kafka && bin/kafka-server-start.sh config/server.properties &"
+  - ln -s kafka/bin/kafka-topics.sh kafka/bin/kafka-topics
+  - ln -s kafka/bin/kafka-console-producer.sh kafka/bin/kafka-console-producer
   - wget https://github.com/edenhill/librdkafka/archive/v0.11.1.tar.gz
-  - tar -zxvf v0.11.1.tar.gz 
+  - tar -zxvf v0.11.1.tar.gz
   - sudo bash -c "cd librdkafka-0.11.1 && ./configure && make && make install"
   - sudo cp /usr/local/lib/librdkafka.so* /lib/
+before_script:
+  - export PATH=$PATH:$PWD/kafka/bin/
 script:
   - make installcheck
 after_failure:
