@@ -29,7 +29,6 @@
 #include "optimizer/var.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-#include "utils/sampling.h"
 
 #ifdef DO_DEBUG
 #define DEBUGLOG(...) elog(DEBUG1, __VA_ARGS__)
