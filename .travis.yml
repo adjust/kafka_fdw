@@ -1,0 +1,30 @@
+sudo: required
+addons:
+   postgresql: 
+        - "9.4"
+        - "9.5"
+        - "9.6"
+matrix:
+   include:
+     - addons: 
+          postgresql: 9.4
+       install:
+           - sudo apt-get install postgresql-server-dev-9.4
+           - sudo make install
+     - addons: 
+          postgresql: 9.5
+       install:
+           - sudo apt-get install postgresql-server-dev-9.5
+           - sudo make install
+     - addons: 
+          postgresql: 9.6
+       install:
+           - sudo apt-get install postgresql-server-dev-9.6
+           - sudo make install
+#     - addons: postgresql: 10
+env:
+  - COVERAGE=1 RELEASE_TESTING=1 DB_TESTING=1
+script:
+  - make installcheck
+after_failure:
+  - cat /home/travis/build/adjust/hashtypes/regression.diffs
