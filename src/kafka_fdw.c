@@ -286,11 +286,11 @@ kafkaGetForeignPlan(PlannerInfo *root,
                             scan_clauses,
                             scan_relid,
                             NIL, /* no expressions to evaluate */
-                            best_path->fdw_private,
-                            NIL, /* no custom tlist */
-                            NIL  /* no remote quals */
+                            best_path->fdw_private
 #if PG_VERSION_NUM >= 90500
                             ,
+                            NIL, /* no custom tlist */
+                            NIL, /* no remote quals */
                             outer_plan
 #endif
     );
