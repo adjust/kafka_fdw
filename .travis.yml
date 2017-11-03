@@ -29,7 +29,7 @@ before_install:
   - nohup bash -c "cd kafka && bin/kafka-server-start.sh config/server.properties &"
   - wget https://github.com/edenhill/librdkafka/archive/v0.11.1.tar.gz
   - tar -zxvf v0.11.1.tar.gz 
-  - sudo bash -c "cd v0.11.1 && make && make install"
+  - sudo bash -c "cd librdkafka-0.11.1 && make && make install"
 script:
   - make installcheck
 after_failure:
