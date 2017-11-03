@@ -34,4 +34,4 @@ before_install:
 script:
   - make installcheck
 after_failure:
-  - cat /home/travis/build/adjust/kafka_fdw/regression.out
+  - cat /home/travis/build/adjust/kafka_fdw/regression.diffs
