@@ -11,48 +11,34 @@ PG_MODULE_MAGIC;
 /*
  * FDW callback routines
  */
-static void
-kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
-static void
-kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
-static ForeignScan *
-kafkaGetForeignPlan(PlannerInfo *root,
-                    RelOptInfo * baserel,
-                    Oid          foreigntableid,
-                    ForeignPath *best_path,
-                    List *       tlist,
-                    List *       scan_clauses,
-                    Plan *       outer_plan);
-static void
-kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es);
-static void
-kafkaBeginForeignScan(ForeignScanState *node, int eflags);
-static TupleTableSlot *
-kafkaIterateForeignScan(ForeignScanState *node);
-static void
-kafkaReScanForeignScan(ForeignScanState *node);
-static void
-kafkaEndForeignScan(ForeignScanState *node);
+static void            kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+static void            kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+static ForeignScan *   kafkaGetForeignPlan(PlannerInfo *root,
+                                           RelOptInfo * baserel,
+                                           Oid          foreigntableid,
+                                           ForeignPath *best_path,
+                                           List *       tlist,
+                                           List *       scan_clauses,
+                                           Plan *       outer_plan);
+static void            kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es);
+static void            kafkaBeginForeignScan(ForeignScanState *node, int eflags);
+static TupleTableSlot *kafkaIterateForeignScan(ForeignScanState *node);
+static void            kafkaReScanForeignScan(ForeignScanState *node);
+static void            kafkaEndForeignScan(ForeignScanState *node);
 
 /*
  * Helper functions
  */
-static void
-kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
-static void
-estimate_size(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private);
-static bool
-check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List **columns);
-static void
-estimate_costs(PlannerInfo *      root,
-               RelOptInfo *       baserel,
-               KafkaFdwPlanState *fdw_private,
-               Cost *             startup_cost,
-               Cost *             total_cost);
-static void
-kafkaStop(KafkaFdwExecutionState *festate);
-static void
-kafkaStart(KafkaFdwExecutionState *festate);
+static void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
+static void estimate_size(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private);
+static bool check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List **columns);
+static void estimate_costs(PlannerInfo *      root,
+                           RelOptInfo *       baserel,
+                           KafkaFdwPlanState *fdw_private,
+                           Cost *             startup_cost,
+                           Cost *             total_cost);
+static void kafkaStop(KafkaFdwExecutionState *festate);
+static void kafkaStart(KafkaFdwExecutionState *festate);
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -137,6 +123,7 @@ estimate_size(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_pri
 
     /* Save the output-rows estimate for the planner */
     baserel->rows = nrows;
+    baserel->rows = fdw_private->ntuples;
 }
 
 /*
@@ -253,7 +240,9 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     add_path(baserel,
              (Path *) create_foreignscan_path(root,
                                               baserel,
+#if PG_VERSION_NUM >= 90600
                                               NULL, /* default pathtarget */
+#endif
                                               baserel->rows,
                                               startup_cost,
                                               total_cost,
@@ -661,8 +650,12 @@ check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List 
         }
     }
 
-    /* Collect all the attributes needed for joins or final output. */
+/* Collect all the attributes needed for joins or final output. */
+#if PG_VERSION_NUM >= 90600
     pull_varattnos((Node *) baserel->reltarget->exprs, baserel->relid, &attrs_used);
+#else
+    pull_varattnos((Node *) baserel->reltargetlist, baserel->relid, &attrs_used);
+#endif
 
     /* Add all the attributes used by restriction clauses. */
     foreach (lc, baserel->baserestrictinfo)
