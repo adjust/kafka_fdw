@@ -262,8 +262,12 @@ kafkaGetForeignPlan(PlannerInfo *root,
                     Oid          foreigntableid,
                     ForeignPath *best_path,
                     List *       tlist,
-                    List *       scan_clauses,
-                    Plan *       outer_plan)
+                    List *       scan_clauses
+#if PG_VERSION_NUM >= 90500
+                    ,
+                    Plan *outer_plan
+#endif
+)
 {
     Index scan_relid = baserel->relid;
 
@@ -284,8 +288,12 @@ kafkaGetForeignPlan(PlannerInfo *root,
                             NIL, /* no expressions to evaluate */
                             best_path->fdw_private,
                             NIL, /* no custom tlist */
-                            NIL, /* no remote quals */
-                            outer_plan);
+                            NIL  /* no remote quals */
+#if PG_VERSION_NUM >= 90500
+                            ,
+                            outer_plan
+#endif
+    );
 }
 
 /* helper function to return a stringified version of scan params */
