@@ -39,6 +39,10 @@
 
 #define KAFKA_MAX_ERR_MSG 200
 
+#ifndef ALLOCSET_DEFAULT_SIZES
+#define ALLOCSET_DEFAULT_SIZES ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
+#endif
+
 enum kafka_op
 {
     OP_INVALID = -1,
@@ -134,14 +138,9 @@ typedef struct KafkaFdwExecutionState
 
 } KafkaFdwExecutionState;
 
-void
-KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
-void
-KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
-void
-KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
-int
-KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate);
-bool
-kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
+void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
+void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
+void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
+int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate);
+bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
 #endif
