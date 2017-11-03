@@ -29,7 +29,6 @@
 #include "optimizer/var.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-#include "utils/sampling.h"
 
 #ifdef DO_DEBUG
 #define DEBUGLOG(...) elog(DEBUG1, __VA_ARGS__)
@@ -41,6 +40,10 @@
 
 #ifndef ALLOCSET_DEFAULT_SIZES
 #define ALLOCSET_DEFAULT_SIZES ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
+#endif
+
+#if PG_VERSION_NUM < 90500
+#define HASH_BLOBS HASH_FUNCTION
 #endif
 
 enum kafka_op
