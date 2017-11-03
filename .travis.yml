@@ -30,6 +30,7 @@ before_install:
   - wget https://github.com/edenhill/librdkafka/archive/v0.11.1.tar.gz
   - tar -zxvf v0.11.1.tar.gz 
   - sudo bash -c "cd librdkafka-0.11.1 && ./configure && make && make install"
+  - sudo cp /usr/local/lib/librdkafka.so* /lib/
 script:
   - make installcheck
 after_failure:
