@@ -40,4 +40,4 @@ script:
 after_failure:
   - cat /home/travis/build/adjust/kafka_fdw/regression.diffs
   - cat /home/travis/build/adjust/kafka_fdw/results/kafka_test.out
-  - kafka-console-consumer --bootstrap-server localhost:9092 --topic contrib_regress --from-beginning --timeout-ms 1000
+  - kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic contrib_regress --from-beginning --timeout-ms 1000

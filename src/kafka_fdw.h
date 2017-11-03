@@ -137,13 +137,14 @@ typedef struct KafkaFdwExecutionState
     Oid *                typioparams;        /* array of element types for in_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
     List *               partition_list;     /* integer list of partitions */
-    MemoryContext        batch_cxt;          /* context holding current batch of messages */
 
 } KafkaFdwExecutionState;
 
 void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
+void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
 void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
-int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate);
+int KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate);
 bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
+
 #endif
