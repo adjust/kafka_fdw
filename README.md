@@ -1,5 +1,9 @@
 # Kafka Foreign Data Wrapper for PostgreSQL
 
+At this point the project is not yet production ready.
+Use with care. Pull requests welcome
+
+
 A simple  foreign data wrapper for Kafka which allows it to be treated as
 a table.
 
