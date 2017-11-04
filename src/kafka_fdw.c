@@ -11,8 +11,8 @@ PG_MODULE_MAGIC;
 /*
  * FDW callback routines
  */
-static void         kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
-static void         kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+static void kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+static void kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
 static ForeignScan *kafkaGetForeignPlan(PlannerInfo *root,
                                         RelOptInfo * baserel,
                                         Oid          foreigntableid,
@@ -23,12 +23,12 @@ static ForeignScan *kafkaGetForeignPlan(PlannerInfo *root,
                                         ,
                                         Plan *outer_plan
 #endif
-);
-static void            kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es);
-static void            kafkaBeginForeignScan(ForeignScanState *node, int eflags);
+                                        );
+static void kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es);
+static void kafkaBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *kafkaIterateForeignScan(ForeignScanState *node);
-static void            kafkaReScanForeignScan(ForeignScanState *node);
-static void            kafkaEndForeignScan(ForeignScanState *node);
+static void kafkaReScanForeignScan(ForeignScanState *node);
+static void kafkaEndForeignScan(ForeignScanState *node);
 
 /*
  * Helper functions
@@ -273,7 +273,7 @@ kafkaGetForeignPlan(PlannerInfo *root,
                     ,
                     Plan *outer_plan
 #endif
-)
+                    )
 {
     Index scan_relid = baserel->relid;
 
@@ -299,7 +299,7 @@ kafkaGetForeignPlan(PlannerInfo *root,
                             NIL, /* no remote quals */
                             outer_plan
 #endif
-    );
+                            );
 }
 
 /* helper function to return a stringified version of scan params */
@@ -510,7 +510,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     /* This also means there is no data */
     if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
     {
-        ereport(NOTICE, (errmsg_internal("kafka_fdw has reached the end of the queue")));
+        DEBUGLOG("kafka_fdw has reached the end of the queue");
         return slot;
     }
 
