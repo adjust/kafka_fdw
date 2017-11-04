@@ -1,8 +1,8 @@
 sudo: required
 addons:
    postgresql:
-        - "9.4"
-        - "9.5"
+#        - "9.4"
+#        - "9.5"
         - "9.6"
 matrix:
    include:
@@ -23,7 +23,7 @@ matrix:
            - sudo make install
 #     - addons: postgresql: 10
 before_install:
-  - wget http://www.us.apache.org/dist/kafka/0.8.2.1/kafka_2.10-0.8.2.1.tgz -O kafka.tgz
+  - wget http://www.us.apache.org/dist/kafka/0.11.0.1/kafka_2.11-0.11.0.1.tgz  -O kafka.tgz
   - mkdir -p kafka && tar xzf kafka.tgz -C kafka --strip-components 1
   - nohup bash -c "cd kafka && bin/zookeeper-server-start.sh config/zookeeper.properties &"
   - nohup bash -c "cd kafka && bin/kafka-server-start.sh config/server.properties &"
@@ -33,11 +33,10 @@ before_install:
   - tar -zxvf v0.11.1.tar.gz
   - sudo bash -c "cd librdkafka-0.11.1 && ./configure && make && make install"
   - sudo cp /usr/local/lib/librdkafka.so* /lib/
-before_script:
-  - export PATH=$PATH:$PWD/kafka/bin/
+
 script:
-  - make installcheck
+  - KAFKA_PRODUCER=$PWD/kafka/bin/kafka-console-producer.sh KAFKA_TOPICS=$PWD/kafka/bin/kafka-topics.sh make installcheck
 after_failure:
   - cat /home/travis/build/adjust/kafka_fdw/regression.diffs
   - cat /home/travis/build/adjust/kafka_fdw/results/kafka_test.out
-  - kafka-console-consumer --bootstrap-server localhost:9092 --topic contrib_regress --from-beginning --timeout-ms 1000
+  - kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic contrib_regress --from-beginning --timeout-ms 1000
