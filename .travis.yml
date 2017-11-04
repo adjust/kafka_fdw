@@ -1,11 +1,8 @@
 sudo: required
-env:
-   - KAFKA_PRODUCER=$PWD/kafka/bin/
-   - KAFKA_TOPICS=$PWD/kafka/bin/
 addons:
    postgresql:
-        - "9.4"
-        - "9.5"
+#        - "9.4"
+#        - "9.5"
         - "9.6"
 matrix:
    include:
@@ -38,7 +35,7 @@ before_install:
   - sudo cp /usr/local/lib/librdkafka.so* /lib/
 
 script:
-  - make installcheck
+  - KAFKA_PRODUCER=$PWD/kafka/bin/kafka-console-producer.sh KAFKA_TOPICS=$PWD/kafka/bin/kafka-topics.sh make installcheck
 after_failure:
   - cat /home/travis/build/adjust/kafka_fdw/regression.diffs
   - cat /home/travis/build/adjust/kafka_fdw/results/kafka_test.out
