@@ -20,7 +20,5 @@ $KAFKA_TOPICS --zookeeper localhost:2181 --create --topic ${topic_part4} --parti
 
 # write some test data to topicc
 for t in $simple_topic $topic_part4; do
-psql -d postgres -U postgres -p $PG_PORT <<EOF
-    COPY(${out_sql}) TO PROGRAM '${kafka_cmd} ${t}' (FORMAT CSV);
-EOF
+	psql -c "COPY(${out_sql}) TO STDOUT (FORMAT CSV);" -d postgres -U postgres -p $PG_PORT -o "| ${kafka_cmd} ${t}" >/dev/null
 done;
