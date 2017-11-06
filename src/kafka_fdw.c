@@ -230,7 +230,11 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 
     /* Decide whether to selectively perform binary conversion */
     if (check_selective_binary_conversion(baserel, foreigntableid, &columns))
+#if PG_VERSION_NUM >= 100000
+        options = lappend(options, makeDefElem("convert_selectively", (Node *) columns, -1));
+#else
         options = lappend(options, makeDefElem("convert_selectively", (Node *) columns));
+#endif
 
     /* Estimate costs */
     estimate_costs(root, baserel, fdw_private, &startup_cost, &total_cost);
