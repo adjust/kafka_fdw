@@ -37,8 +37,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (pa
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(2,2)) ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,2)) ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > '5' AND part = '1' ;
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  '5' < offs AND '1' = part ;
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
 
 -- check that we really have messages
 SELECT SUM(count) FROM (

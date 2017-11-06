@@ -50,20 +50,20 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,
 ERROR:  scanning of multiple offsets not allowed
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
 ERROR:  offset and partition must be set in WHERE clause
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > '5' AND part = '1' ;
-                   QUERY PLAN                    
--------------------------------------------------
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
+              QUERY PLAN               
+---------------------------------------
  Foreign Scan on kafka_test_part
-   Filter: ((offs > '5'::bigint) AND (part = 1))
+   Filter: ((offs > 5) AND (part = 1))
    Kafka topic: contrib_regress4
    scanning: PARTITION = 1 OFFSET 6 
 (4 rows)
 
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  '5' < offs AND '1' = part ;
-                   QUERY PLAN                    
--------------------------------------------------
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
+              QUERY PLAN               
+---------------------------------------
  Foreign Scan on kafka_test_part
-   Filter: (('5'::bigint < offs) AND (1 = part))
+   Filter: ((5 < offs) AND (1 = part))
    Kafka topic: contrib_regress4
    scanning: PARTITION = 1 OFFSET 6 
 (4 rows)
