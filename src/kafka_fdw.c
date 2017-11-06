@@ -360,7 +360,6 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     Oid                     in_func_oid;
     List *                  attnums     = NIL;
     List *                  fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
-    EState *                estate      = node->ss.ps.state;
 
     kafka_options = *(KafkaOptions *) list_nth(fdw_private, 0);
     parse_options = *(ParseOptions *) list_nth(fdw_private, 1);
