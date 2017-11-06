@@ -513,7 +513,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     /* This also means there is no data */
     if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
     {
-        ereport(NOTICE, (errmsg_internal("kafka_fdw has reached the end of the queue")));
+        DEBUGLOG("kafka_fdw has reached the end of the queue");
         return slot;
     }
 

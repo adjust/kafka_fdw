@@ -80,10 +80,6 @@ SELECT COUNT(*) FROM kafka_test_part WHERE part = 3 AND offs >= 0
 UNION ALL
 SELECT COUNT(*) FROM kafka_test_part WHERE part = 4 AND offs >= 0
 )t;
-NOTICE:  kafka_fdw has reached the end of the queue
-NOTICE:  kafka_fdw has reached the end of the queue
-NOTICE:  kafka_fdw has reached the end of the queue
-NOTICE:  kafka_fdw has reached the end of the queue
   sum   
 --------
  100000
