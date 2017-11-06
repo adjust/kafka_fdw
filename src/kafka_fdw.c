@@ -376,8 +376,6 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 
     /* setup execution state */
     festate = (KafkaFdwExecutionState *) palloc0(sizeof(KafkaFdwExecutionState));
-    /* Create contexts for batches of tuples and per-tuple temp workspace. */
-    festate->batch_cxt = AllocSetContextCreate(estate->es_query_cxt, "kafka_fdw message data", ALLOCSET_DEFAULT_SIZES);
 
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
@@ -447,8 +445,7 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
           (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", kafka_options.topic)));
 
     // festate->buffer = palloc(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
-    festate->buffer =
-      MemoryContextAllocZero(festate->batch_cxt, sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
+    festate->buffer = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
     kafkaStart(festate);
 }
@@ -461,7 +458,7 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 static TupleTableSlot *
 kafkaIterateForeignScan(ForeignScanState *node)
 {
-    DEBUGLOG("%s", __func__);
+    // DEBUGLOG("%s", __func__);
 
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
     TupleTableSlot *        slot    = node->ss.ss_ScanTupleSlot;
@@ -622,7 +619,9 @@ kafkaEndForeignScan(ForeignScanState *node)
         festate->buffer_cursor++;
     }
 
-    MemoryContextReset(festate->batch_cxt);
+    // MemoryContextReset(festate->batch_cxt);
+    kafkaCloseConnection(festate);
+
     pfree(festate->buffer);
 }
 
@@ -748,7 +747,13 @@ check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List 
 static void
 kafkaStop(KafkaFdwExecutionState *festate)
 {
-    rd_kafka_consume_stop(festate->kafka_topic_handle, festate->kafka_options.scan_params.partition);
+    if (rd_kafka_consume_stop(festate->kafka_topic_handle, festate->kafka_options.scan_params.partition) == -1)
+    {
+        rd_kafka_resp_err_t err = rd_kafka_last_error();
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_ERROR),
+                 errmsg_internal("kafka_fdw: Failed to stop consuming: %s", rd_kafka_err2str(err))));
+    }
 }
 static void
 kafkaStart(KafkaFdwExecutionState *festate)
