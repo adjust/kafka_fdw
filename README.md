@@ -1,5 +1,7 @@
 # Kafka Foreign Data Wrapper for PostgreSQL
 
+[![Build Status](https://travis-ci.org/adjust/kafka_fdw.svg?branch=master)](https://travis-ci.org/adjust/kafka_fdw)
+
 At this point the project is not yet production ready.
 Use with care. Pull requests welcome
 
