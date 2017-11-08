@@ -832,9 +832,10 @@ kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelatio
      */
     if (plan->returningLists)
         returningList = (List *) list_nth(plan->returningLists, subplan_index);
-
+#if PG_VERSION_NUM >= 90500
     if (plan->onConflictAction)
         elog(ERROR, "unexpected ON CONFLICT specification: %d", (int) plan->onConflictAction);
+#endif
 
     heap_close(rel, NoLock);
 
