@@ -1023,8 +1023,10 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
     int          pindex    = 0;
     int          num_attrs = list_length(festate->attnumlist);
     values                 = (const char **) palloc(sizeof(char *) * num_attrs);
-    int partition          = 0;
-    int ret;
+    int   partition        = RD_KAFKA_PARTITION_UA;
+    int   ret;
+    Datum value;
+    bool  isnull;
 
     if (slot != NULL && festate->attnumlist != NIL)
     {
@@ -1032,9 +1034,7 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
 
         foreach (lc, festate->attnumlist)
         {
-            int   attnum = lfirst_int(lc);
-            Datum value;
-            bool  isnull;
+            int attnum = lfirst_int(lc);
 
             value = slot_getattr(slot, attnum, &isnull);
             if (isnull)
@@ -1045,7 +1045,10 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
             pindex++;
         }
     }
-    Assert(pindex == festate->p_nums);
+    /* fetch partition if given */
+    value = slot_getattr(slot, festate->kafka_options.partition_attnum, &isnull);
+    if (!isnull)
+        partition = DatumGetInt32(value);
 
     KafkaWriteAttributesCSV(festate, values, num_attrs);
     DEBUGLOG("CSV ROW: %s", festate->attribute_buf.data);
@@ -1054,12 +1057,13 @@ retry:
 
     ret = rd_kafka_produce(festate->kafka_topic_handle,
                            partition,
-                           RD_KAFKA_MSG_F_COPY,
-                           festate->attribute_buf.data,
+                           RD_KAFKA_MSG_F_COPY,         // Make a copy of the payload.
+                           festate->attribute_buf.data, // Message payload (value) and length
                            festate->attribute_buf.len,
-                           NULL,
+                           NULL, // Optional key and its length
                            0,
-                           NULL);
+                           NULL // Message opaque, provided in  delivery report callback as* msg_opaque.
+    );
     if (ret != 0)
     {
         elog(ERROR,

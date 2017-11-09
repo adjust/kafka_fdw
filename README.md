@@ -70,6 +70,30 @@ With the defined meta columns you can query like so:
 SELECT * FROM kafka_test WHERE part = 0 AND offs > 1000 LIMIT 60;
 ```
 
+## Producing
+
+Inserting Data into kafak works with INSERT statements. If you provide the partition
+as a values that will be user otherwise kafkas builtin partitioner will select partition.
+
+
+add partition as a value
+
+```
+INSERT INTO kafka_test(part, some_int, some_text)
+VALUES
+    (0, 5464565, 'some text goes into partition 0'),
+    (1, 5464565, 'some text goes into partition 1'),
+    (0, 5464565, 'some text goes into partition 0'),
+    (3, 5464565, 'some text goes into partition 3'),
+    (NULL, 5464565, 'some text goes into partition selected by kafka');
+```
+use built in partitioner
+
+```
+INSERT INTO kafka_test(some_int, some_text)
+VALUES
+    (5464565, 'some text goes into partition selected by kafka');
+```
 
 ### Testing
 
