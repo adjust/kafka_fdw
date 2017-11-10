@@ -40,6 +40,15 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
 
+-- run some memload
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+
 -- check that we really have messages
 SELECT SUM(count) FROM (
 SELECT COUNT(*) FROM kafka_test_part WHERE part = 0 AND offs >= 0

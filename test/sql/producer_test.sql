@@ -26,6 +26,15 @@ INSERT INTO kafka_test_prod(part, some_int, some_text, some_date)
 
 RETURNING *;
 
+-- run some memload
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+
 
 SELECT * FROM kafka_test_prod WHERE offs >= 0 and part=1;
 
