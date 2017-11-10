@@ -43,7 +43,7 @@ SELECT i,
     'It''s some text, that is for number '||i,
     ('2015-01-01'::date + (i || ' minutes')::interval)::date,
     ('2015-01-01'::date + (i || ' minutes')::interval)::timestamp
-FROM generate_series(1,1e6::int, 10) i ORDER BY i;
+FROM generate_series(1,1e4::int, 10) i ORDER BY i;
 
 
 --- check total was inserted
@@ -58,19 +58,19 @@ SELECT COUNT(*) FROM kafka_test_prod WHERE offs >= 0 and part=3
 )t;
 
 --- check auto distribution makes sense
-SELECT COUNT(*) BETWEEN 10000 AND 30000 FROM kafka_test_prod WHERE offs >= 0 and part=0;
-SELECT COUNT(*) BETWEEN 10000 AND 30000 FROM kafka_test_prod WHERE offs >= 0 and part=1;
-SELECT COUNT(*) BETWEEN 10000 AND 30000 FROM kafka_test_prod WHERE offs >= 0 and part=2;
-SELECT COUNT(*) BETWEEN 10000 AND 30000 FROM kafka_test_prod WHERE offs >= 0 and part=3;
+SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=0;
+SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=1;
+SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=2;
+SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=3;
 
 
 --- check data is readable
 SELECT some_int, some_text, some_date FROM(
-(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=0 AND some_int = 10031 LIMIT 1)
+(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=0 AND some_int = 231 LIMIT 1)
 UNION ALL
-(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=1 AND some_int = 10031 LIMIT 1)
+(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=1 AND some_int = 231 LIMIT 1)
 UNION ALL
-(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=2 AND some_int = 10031 LIMIT 1)
+(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=2 AND some_int = 231 LIMIT 1)
 UNION ALL
-(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=3 AND some_int = 10031 LIMIT 1)
+(SELECT some_int, some_text, some_date FROM kafka_test_prod WHERE offs >= 0 and part=3 AND some_int = 231 LIMIT 1)
 )t;

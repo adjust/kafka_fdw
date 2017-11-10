@@ -70,6 +70,22 @@ With the defined meta columns you can query like so:
 SELECT * FROM kafka_test WHERE part = 0 AND offs > 1000 LIMIT 60;
 ```
 
+## Error handling
+
+The default for consuming kafka data is not very strict i.e. to less columns
+will be assumed be NULL and to many will be ignored.
+If you don't like this behaviour you can enable strictness via table options
+`strict 'true'`. Thus any such column will error out the query.
+However invalid or unparsable data e.g. text for numeric data or invalid date
+or such will still error out per default. To ignore such data you can pass
+`ignore_junk 'true'` as table options and these columns will be set to NULL.
+Alternatively you can add table columns with the attributes
+`junk 'true'` and / or `junk_error 'true'`. While fetching data kafka_fdw
+will then put the whole payload into the junk column and / or the errormessage(s)
+into the junk_error column.
+see test/sql/junk_test.sql for a usage example.
+
+
 ## Producing
 
 Inserting Data into kafak works with INSERT statements. If you provide the partition

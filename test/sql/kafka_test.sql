@@ -1,10 +1,4 @@
 -- standard setup
-CREATE SERVER kafka_server
-FOREIGN DATA WRAPPER kafka_fdw
-OPTIONS (brokers 'localhost:9092');
-
-CREATE USER MAPPING FOR PUBLIC SERVER kafka_server;
-
 CREATE FOREIGN TABLE kafka_test_part (
     part int OPTIONS (partition 'true'),
     offs bigint OPTIONS (offset 'true'),

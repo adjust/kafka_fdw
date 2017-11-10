@@ -27,6 +27,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/var.h"
+#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -41,6 +42,10 @@
 #ifndef ALLOCSET_DEFAULT_SIZES
 #define ALLOCSET_DEFAULT_SIZES ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
 #endif
+
+#define DEFAULT_KAFKA_OPTIONS                                                                                          \
+    .batch_size = 1000, .buffer_delay = 100, .offset_attnum = -1, .partition_attnum = -1, .junk_attnum = -1,           \
+    .junk_error_attnum = -1, .strict = false, .num_parse_col = 0, .ignore_junk = false
 
 enum kafka_op
 {
@@ -67,9 +72,14 @@ typedef struct KafkaOptions
     char *          topic;
     int             batch_size;
     int             buffer_delay;
-    int             offset_attnum;    /* attribute number for offset col */
-    int             partition_attnum; /* attribute number for offset col */
-    KafkaScanParams scan_params;      /* the partition / offset tuple see above */
+    int             offset_attnum;     /* attribute number for offset col */
+    int             partition_attnum;  /* attribute number for partition col */
+    int             junk_attnum;       /* attribute number for junk col */
+    int             junk_error_attnum; /* attribute number for junk_error col */
+    bool            strict;            /* force strict parsing */
+    bool            ignore_junk;       /* ignore junk data by setting it to null */
+    int             num_parse_col;     /* number of parsable columns */
+    KafkaScanParams scan_params;       /* the partition / offset tuple see above */
 } KafkaOptions;
 
 typedef struct ParseOptions
@@ -124,7 +134,8 @@ typedef struct KafkaFdwExecutionState
     rd_kafka_t *         kafka_handle;       /* connection to act on */
     rd_kafka_topic_t *   kafka_topic_handle; /* topic to act on */
     rd_kafka_message_t **buffer;             /* message buffer */
-    StringInfoData       attribute_buf;      /* attribute buffer */
+    StringInfoData       attribute_buf;      /* reused attribute buffer */
+    StringInfoData       junk_buf;           /* reused buffer for junk error messages */
     char **              raw_fields;         /* pointers into attribute_buf */
     int                  max_fields;         /* max number of raw_fields */
     ssize_t              buffer_count;       /* number of messages currently in buffer*/
@@ -162,7 +173,7 @@ void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MA
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
 void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
-int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate);
+int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
 bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
 void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, const char **values, int num_values);
 
