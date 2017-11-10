@@ -41,6 +41,49 @@ RETURNING *;
     1 |      |       10 | foo text 10 | 01-10-2017 | 
 (10 rows)
 
+-- run some memload
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
 SELECT * FROM kafka_test_prod WHERE offs >= 0 and part=1;
  part | offs | some_int |  some_text  | some_date  | some_time 
 ------+------+----------+-------------+------------+-----------
