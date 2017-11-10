@@ -21,7 +21,7 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate)
      * data line, so we can just force attribute_buf to be large enough and
      * then transfer data without any checks for enough space.  We need to do
      * it this way because enlarging attribute_buf mid-stream would invalidate
-     * pointers already stored into cstate->raw_fields[].
+     * pointers already stored into festate->raw_fields[].
      */
     if (festate->attribute_buf.maxlen <= msg_len)
         enlargeStringInfo(&festate->attribute_buf, msg_len);
@@ -150,4 +150,80 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate)
     Assert(*output_ptr == '\0');
 
     return fieldno;
+}
+
+#define DUMPSOFAR()                                                                                                    \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (ptr > start)                                                                                               \
+            appendBinaryStringInfo(&festate->attribute_buf, start, ptr - start);                                       \
+    } while (0)
+
+/*
+ *  Write a row of csv to festate->attribute_buf
+ */
+
+void
+KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, const char **values, int num_values)
+{
+    DEBUGLOG("%s", __func__);
+    int  attnum;
+    char delimc  = festate->parse_options.delim[0];
+    char quotec  = festate->parse_options.quote[0];
+    char escapec = festate->parse_options.escape[0];
+
+    for (attnum = 1; attnum <= num_values; attnum++)
+    {
+
+        const char *ptr, *start;
+        char        c;
+        bool        use_quote = false;
+        const char *val       = *values;
+        const char *tptr      = val;
+
+        if (val)
+        {
+            DEBUGLOG("VAL is %s", val);
+            /*
+             * Make a preliminary pass to discover if it needs quoting
+             */
+            while ((c = *tptr) != '\0')
+            {
+                if (c == delimc || c == quotec || c == '\n' || c == '\r')
+                {
+                    use_quote = true;
+                    break;
+                }
+                tptr++;
+            }
+
+            ptr = val;
+
+            if (use_quote)
+            {
+                start = ptr;
+                appendStringInfoCharMacro(&festate->attribute_buf, quotec);
+
+                while ((c = *ptr) != '\0')
+                {
+                    if (c == quotec || c == escapec)
+                    {
+                        DUMPSOFAR();
+                        appendStringInfoCharMacro(&festate->attribute_buf, escapec);
+                        start = ptr; /* we include char in next run */
+                    }
+                    ptr++;
+                }
+                DUMPSOFAR();
+                appendStringInfoCharMacro(&festate->attribute_buf, quotec);
+            }
+            else
+            {
+                appendBinaryStringInfo(&festate->attribute_buf, ptr, strlen(ptr));
+            }
+        }
+
+        appendStringInfoCharMacro(&festate->attribute_buf, delimc);
+        values++;
+    }
 }

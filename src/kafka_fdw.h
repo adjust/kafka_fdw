@@ -136,11 +136,34 @@ typedef struct KafkaFdwExecutionState
 
 } KafkaFdwExecutionState;
 
+/*
+ * FDW-specific information for ForeignModifyState.fdw_state.
+ */
+typedef struct KafkaFdwModifyState
+{
+    KafkaOptions         kafka_options;      /* kafka optopns */
+    ParseOptions         parse_options;      /* merged COPY options */
+    rd_kafka_t *         kafka_handle;       /* connection to act on */
+    rd_kafka_topic_t *   kafka_topic_handle; /* topic to act on */
+    rd_kafka_message_t **buffer;             /* message buffer */
+    StringInfoData       attribute_buf;      /* attribute buffer */
+    char **              raw_fields;         /* pointers into attribute_buf */
+    int                  max_fields;         /* max number of raw_fields */
+    ssize_t              buffer_count;       /* number of messages currently in buffer*/
+    ssize_t              buffer_cursor;      /* current message */
+    FmgrInfo *           out_functions;      /* array of output functions for each attrs */
+    Oid *                typioparams;        /* array of element types for out_functions */
+    List *               attnumlist;         /* integer list of attnums to copy */
+    List *               partition_list;     /* integer list of partitions */
+
+} KafkaFdwModifyState;
+
 void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
 void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
 int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate);
 bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
+void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, const char **values, int num_values);
 
 #endif
