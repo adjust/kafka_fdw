@@ -1,0 +1,350 @@
+-- standard setup
+CREATE SERVER kafka_server
+FOREIGN DATA WRAPPER kafka_fdw
+OPTIONS (brokers 'localhost:9092');
+ERROR:  server "kafka_server" already exists
+CREATE USER MAPPING FOR PUBLIC SERVER kafka_server;
+ERROR:  user mapping "public" already exists for server kafka_server
+CREATE FOREIGN TABLE kafka_test_part (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    some_int int,
+    some_text text,
+    some_date date,
+    some_time timestamp
+)
+SERVER kafka_server OPTIONS
+    (format 'csv', topic 'contrib_regress4', batch_size '30', buffer_delay '100');
+ERROR:  relation "kafka_test_part" already exists
+CREATE FOREIGN TABLE kafka_test_single_part (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    some_int int,
+    some_text text,
+    some_date date,
+    some_time timestamp
+)
+SERVER kafka_server OPTIONS
+    (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
+ERROR:  relation "kafka_test_single_part" already exists
+-- check that we parse the queries right or error out if needed
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
+              QUERY PLAN               
+---------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((offs = 1) AND (part = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 0 OFFSET 1 
+(4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 AND offs > 4 AND offs > 10 AND offs < 100;
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((offs > 4) AND (offs > 10) AND (offs < 100) AND (part = 1) AND (some_int = 3))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 OFFSET 11 
+(4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (part,offs)=(2,1);
+ERROR:  scanning of multiple partitions not allowed
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(2,2)) ;
+ERROR:  scanning of multiple partitions not allowed
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,2)) ;
+ERROR:  scanning of multiple offsets not allowed
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
+ERROR:  offset and partition must be set in WHERE clause
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
+              QUERY PLAN               
+---------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((offs > 5) AND (part = 1))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 OFFSET 6 
+(4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
+              QUERY PLAN               
+---------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((5 < offs) AND (1 = part))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 OFFSET 6 
+(4 rows)
+
+-- run some memload
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+-- check that we really have messages
+SELECT SUM(count) FROM (
+SELECT COUNT(*) FROM kafka_test_part WHERE part = 0 AND offs >= 0
+UNION ALL
+SELECT COUNT(*) FROM kafka_test_part WHERE part = 1 AND offs >= 0
+UNION ALL
+SELECT COUNT(*) FROM kafka_test_part WHERE part = 2 AND offs >= 0
+UNION ALL
+SELECT COUNT(*) FROM kafka_test_part WHERE part = 3 AND offs >= 0
+UNION ALL
+SELECT COUNT(*) FROM kafka_test_part WHERE part = 4 AND offs >= 0
+)t;
+  sum   
+--------
+ 457319
+(1 row)
+
+-- see that we can properly parse messages
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 0 LIMIT 30;
+ part | offs | some_int |               some_text                | some_date  |        some_time         
+------+------+----------+----------------------------------------+------------+--------------------------
+    0 |    1 |       11 | It's some text, that is for number 11  | 01-01-2015 | Thu Jan 01 00:00:11 2015
+    0 |    2 |       21 | It's some text, that is for number 21  | 01-01-2015 | Thu Jan 01 00:00:21 2015
+    0 |    3 |       31 | It's some text, that is for number 31  | 01-01-2015 | Thu Jan 01 00:00:31 2015
+    0 |    4 |       41 | It's some text, that is for number 41  | 01-01-2015 | Thu Jan 01 00:00:41 2015
+    0 |    5 |       51 | It's some text, that is for number 51  | 01-01-2015 | Thu Jan 01 00:00:51 2015
+    0 |    6 |       61 | It's some text, that is for number 61  | 01-01-2015 | Thu Jan 01 00:01:01 2015
+    0 |    7 |       71 | It's some text, that is for number 71  | 01-01-2015 | Thu Jan 01 00:01:11 2015
+    0 |    8 |       81 | It's some text, that is for number 81  | 01-01-2015 | Thu Jan 01 00:01:21 2015
+    0 |    9 |       91 | It's some text, that is for number 91  | 01-01-2015 | Thu Jan 01 00:01:31 2015
+    0 |   10 |      101 | It's some text, that is for number 101 | 01-01-2015 | Thu Jan 01 00:01:41 2015
+    0 |   11 |      111 | It's some text, that is for number 111 | 01-01-2015 | Thu Jan 01 00:01:51 2015
+    0 |   12 |      121 | It's some text, that is for number 121 | 01-01-2015 | Thu Jan 01 00:02:01 2015
+    0 |   13 |      131 | It's some text, that is for number 131 | 01-01-2015 | Thu Jan 01 00:02:11 2015
+    0 |   14 |      141 | It's some text, that is for number 141 | 01-01-2015 | Thu Jan 01 00:02:21 2015
+    0 |   15 |      151 | It's some text, that is for number 151 | 01-01-2015 | Thu Jan 01 00:02:31 2015
+    0 |   16 |      161 | It's some text, that is for number 161 | 01-01-2015 | Thu Jan 01 00:02:41 2015
+    0 |   17 |      171 | It's some text, that is for number 171 | 01-01-2015 | Thu Jan 01 00:02:51 2015
+    0 |   18 |      181 | It's some text, that is for number 181 | 01-01-2015 | Thu Jan 01 00:03:01 2015
+    0 |   19 |      191 | It's some text, that is for number 191 | 01-01-2015 | Thu Jan 01 00:03:11 2015
+    0 |   20 |      201 | It's some text, that is for number 201 | 01-01-2015 | Thu Jan 01 00:03:21 2015
+    0 |   21 |      211 | It's some text, that is for number 211 | 01-01-2015 | Thu Jan 01 00:03:31 2015
+    0 |   22 |      221 | It's some text, that is for number 221 | 01-01-2015 | Thu Jan 01 00:03:41 2015
+    0 |   23 |      231 | It's some text, that is for number 231 | 01-01-2015 | Thu Jan 01 00:03:51 2015
+    0 |   24 |      241 | It's some text, that is for number 241 | 01-01-2015 | Thu Jan 01 00:04:01 2015
+    0 |   25 |      251 | It's some text, that is for number 251 | 01-01-2015 | Thu Jan 01 00:04:11 2015
+    0 |   26 |      261 | It's some text, that is for number 261 | 01-01-2015 | Thu Jan 01 00:04:21 2015
+    0 |   27 |      271 | It's some text, that is for number 271 | 01-01-2015 | Thu Jan 01 00:04:31 2015
+    0 |   28 |      281 | It's some text, that is for number 281 | 01-01-2015 | Thu Jan 01 00:04:41 2015
+    0 |   29 |      291 | It's some text, that is for number 291 | 01-01-2015 | Thu Jan 01 00:04:51 2015
+    0 |   30 |      301 | It's some text, that is for number 301 | 01-01-2015 | Thu Jan 01 00:05:01 2015
+(30 rows)
+
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10 LIMIT 30;
+ part | offs | some_int |               some_text                | some_date  |        some_time         
+------+------+----------+----------------------------------------+------------+--------------------------
+    0 |   11 |      111 | It's some text, that is for number 111 | 01-01-2015 | Thu Jan 01 00:01:51 2015
+    0 |   12 |      121 | It's some text, that is for number 121 | 01-01-2015 | Thu Jan 01 00:02:01 2015
+    0 |   13 |      131 | It's some text, that is for number 131 | 01-01-2015 | Thu Jan 01 00:02:11 2015
+    0 |   14 |      141 | It's some text, that is for number 141 | 01-01-2015 | Thu Jan 01 00:02:21 2015
+    0 |   15 |      151 | It's some text, that is for number 151 | 01-01-2015 | Thu Jan 01 00:02:31 2015
+    0 |   16 |      161 | It's some text, that is for number 161 | 01-01-2015 | Thu Jan 01 00:02:41 2015
+    0 |   17 |      171 | It's some text, that is for number 171 | 01-01-2015 | Thu Jan 01 00:02:51 2015
+    0 |   18 |      181 | It's some text, that is for number 181 | 01-01-2015 | Thu Jan 01 00:03:01 2015
+    0 |   19 |      191 | It's some text, that is for number 191 | 01-01-2015 | Thu Jan 01 00:03:11 2015
+    0 |   20 |      201 | It's some text, that is for number 201 | 01-01-2015 | Thu Jan 01 00:03:21 2015
+    0 |   21 |      211 | It's some text, that is for number 211 | 01-01-2015 | Thu Jan 01 00:03:31 2015
+    0 |   22 |      221 | It's some text, that is for number 221 | 01-01-2015 | Thu Jan 01 00:03:41 2015
+    0 |   23 |      231 | It's some text, that is for number 231 | 01-01-2015 | Thu Jan 01 00:03:51 2015
+    0 |   24 |      241 | It's some text, that is for number 241 | 01-01-2015 | Thu Jan 01 00:04:01 2015
+    0 |   25 |      251 | It's some text, that is for number 251 | 01-01-2015 | Thu Jan 01 00:04:11 2015
+    0 |   26 |      261 | It's some text, that is for number 261 | 01-01-2015 | Thu Jan 01 00:04:21 2015
+    0 |   27 |      271 | It's some text, that is for number 271 | 01-01-2015 | Thu Jan 01 00:04:31 2015
+    0 |   28 |      281 | It's some text, that is for number 281 | 01-01-2015 | Thu Jan 01 00:04:41 2015
+    0 |   29 |      291 | It's some text, that is for number 291 | 01-01-2015 | Thu Jan 01 00:04:51 2015
+    0 |   30 |      301 | It's some text, that is for number 301 | 01-01-2015 | Thu Jan 01 00:05:01 2015
+    0 |   31 |      311 | It's some text, that is for number 311 | 01-01-2015 | Thu Jan 01 00:05:11 2015
+    0 |   32 |      321 | It's some text, that is for number 321 | 01-01-2015 | Thu Jan 01 00:05:21 2015
+    0 |   33 |      331 | It's some text, that is for number 331 | 01-01-2015 | Thu Jan 01 00:05:31 2015
+    0 |   34 |      341 | It's some text, that is for number 341 | 01-01-2015 | Thu Jan 01 00:05:41 2015
+    0 |   35 |      351 | It's some text, that is for number 351 | 01-01-2015 | Thu Jan 01 00:05:51 2015
+    0 |   36 |      361 | It's some text, that is for number 361 | 01-01-2015 | Thu Jan 01 00:06:01 2015
+    0 |   37 |      371 | It's some text, that is for number 371 | 01-01-2015 | Thu Jan 01 00:06:11 2015
+    0 |   38 |      381 | It's some text, that is for number 381 | 01-01-2015 | Thu Jan 01 00:06:21 2015
+    0 |   39 |      391 | It's some text, that is for number 391 | 01-01-2015 | Thu Jan 01 00:06:31 2015
+    0 |   40 |      401 | It's some text, that is for number 401 | 01-01-2015 | Thu Jan 01 00:06:41 2015
+(30 rows)
+
+SELECT * FROM kafka_test_single_part WHERE part = 1 AND offs > 100 LIMIT 30;
+ part | offs | some_int | some_text | some_date | some_time 
+------+------+----------+-----------+-----------+-----------
+(0 rows)
+
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 1000 LIMIT 30;
+ part | offs | some_int |                some_text                 | some_date  |        some_time         
+------+------+----------+------------------------------------------+------------+--------------------------
+    0 | 1001 |    10011 | It's some text, that is for number 10011 | 01-01-2015 | Thu Jan 01 02:46:51 2015
+    0 | 1002 |    10021 | It's some text, that is for number 10021 | 01-01-2015 | Thu Jan 01 02:47:01 2015
+    0 | 1003 |    10031 | It's some text, that is for number 10031 | 01-01-2015 | Thu Jan 01 02:47:11 2015
+    0 | 1004 |    10041 | It's some text, that is for number 10041 | 01-01-2015 | Thu Jan 01 02:47:21 2015
+    0 | 1005 |    10051 | It's some text, that is for number 10051 | 01-01-2015 | Thu Jan 01 02:47:31 2015
+    0 | 1006 |    10061 | It's some text, that is for number 10061 | 01-01-2015 | Thu Jan 01 02:47:41 2015
+    0 | 1007 |    10071 | It's some text, that is for number 10071 | 01-01-2015 | Thu Jan 01 02:47:51 2015
+    0 | 1008 |    10081 | It's some text, that is for number 10081 | 01-01-2015 | Thu Jan 01 02:48:01 2015
+    0 | 1009 |    10091 | It's some text, that is for number 10091 | 01-01-2015 | Thu Jan 01 02:48:11 2015
+    0 | 1010 |    10101 | It's some text, that is for number 10101 | 01-01-2015 | Thu Jan 01 02:48:21 2015
+    0 | 1011 |    10111 | It's some text, that is for number 10111 | 01-01-2015 | Thu Jan 01 02:48:31 2015
+    0 | 1012 |    10121 | It's some text, that is for number 10121 | 01-01-2015 | Thu Jan 01 02:48:41 2015
+    0 | 1013 |    10131 | It's some text, that is for number 10131 | 01-01-2015 | Thu Jan 01 02:48:51 2015
+    0 | 1014 |    10141 | It's some text, that is for number 10141 | 01-01-2015 | Thu Jan 01 02:49:01 2015
+    0 | 1015 |    10151 | It's some text, that is for number 10151 | 01-01-2015 | Thu Jan 01 02:49:11 2015
+    0 | 1016 |    10161 | It's some text, that is for number 10161 | 01-01-2015 | Thu Jan 01 02:49:21 2015
+    0 | 1017 |    10171 | It's some text, that is for number 10171 | 01-01-2015 | Thu Jan 01 02:49:31 2015
+    0 | 1018 |    10181 | It's some text, that is for number 10181 | 01-01-2015 | Thu Jan 01 02:49:41 2015
+    0 | 1019 |    10191 | It's some text, that is for number 10191 | 01-01-2015 | Thu Jan 01 02:49:51 2015
+    0 | 1020 |    10201 | It's some text, that is for number 10201 | 01-01-2015 | Thu Jan 01 02:50:01 2015
+    0 | 1021 |    10211 | It's some text, that is for number 10211 | 01-01-2015 | Thu Jan 01 02:50:11 2015
+    0 | 1022 |    10221 | It's some text, that is for number 10221 | 01-01-2015 | Thu Jan 01 02:50:21 2015
+    0 | 1023 |    10231 | It's some text, that is for number 10231 | 01-01-2015 | Thu Jan 01 02:50:31 2015
+    0 | 1024 |    10241 | It's some text, that is for number 10241 | 01-01-2015 | Thu Jan 01 02:50:41 2015
+    0 | 1025 |    10251 | It's some text, that is for number 10251 | 01-01-2015 | Thu Jan 01 02:50:51 2015
+    0 | 1026 |    10261 | It's some text, that is for number 10261 | 01-01-2015 | Thu Jan 01 02:51:01 2015
+    0 | 1027 |    10271 | It's some text, that is for number 10271 | 01-01-2015 | Thu Jan 01 02:51:11 2015
+    0 | 1028 |    10281 | It's some text, that is for number 10281 | 01-01-2015 | Thu Jan 01 02:51:21 2015
+    0 | 1029 |    10291 | It's some text, that is for number 10291 | 01-01-2015 | Thu Jan 01 02:51:31 2015
+    0 | 1030 |    10301 | It's some text, that is for number 10301 | 01-01-2015 | Thu Jan 01 02:51:41 2015
+(30 rows)
+
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10000 LIMIT 30;
+ part | offs  | some_int |                 some_text                 | some_date  |        some_time         
+------+-------+----------+-------------------------------------------+------------+--------------------------
+    0 | 10001 |   100011 | It's some text, that is for number 100011 | 01-02-2015 | Fri Jan 02 03:46:51 2015
+    0 | 10002 |   100021 | It's some text, that is for number 100021 | 01-02-2015 | Fri Jan 02 03:47:01 2015
+    0 | 10003 |   100031 | It's some text, that is for number 100031 | 01-02-2015 | Fri Jan 02 03:47:11 2015
+    0 | 10004 |   100041 | It's some text, that is for number 100041 | 01-02-2015 | Fri Jan 02 03:47:21 2015
+    0 | 10005 |   100051 | It's some text, that is for number 100051 | 01-02-2015 | Fri Jan 02 03:47:31 2015
+    0 | 10006 |   100061 | It's some text, that is for number 100061 | 01-02-2015 | Fri Jan 02 03:47:41 2015
+    0 | 10007 |   100071 | It's some text, that is for number 100071 | 01-02-2015 | Fri Jan 02 03:47:51 2015
+    0 | 10008 |   100081 | It's some text, that is for number 100081 | 01-02-2015 | Fri Jan 02 03:48:01 2015
+    0 | 10009 |   100091 | It's some text, that is for number 100091 | 01-02-2015 | Fri Jan 02 03:48:11 2015
+    0 | 10010 |   100101 | It's some text, that is for number 100101 | 01-02-2015 | Fri Jan 02 03:48:21 2015
+    0 | 10011 |   100111 | It's some text, that is for number 100111 | 01-02-2015 | Fri Jan 02 03:48:31 2015
+    0 | 10012 |   100121 | It's some text, that is for number 100121 | 01-02-2015 | Fri Jan 02 03:48:41 2015
+    0 | 10013 |   100131 | It's some text, that is for number 100131 | 01-02-2015 | Fri Jan 02 03:48:51 2015
+    0 | 10014 |   100141 | It's some text, that is for number 100141 | 01-02-2015 | Fri Jan 02 03:49:01 2015
+    0 | 10015 |   100151 | It's some text, that is for number 100151 | 01-02-2015 | Fri Jan 02 03:49:11 2015
+    0 | 10016 |   100161 | It's some text, that is for number 100161 | 01-02-2015 | Fri Jan 02 03:49:21 2015
+    0 | 10017 |   100171 | It's some text, that is for number 100171 | 01-02-2015 | Fri Jan 02 03:49:31 2015
+    0 | 10018 |   100181 | It's some text, that is for number 100181 | 01-02-2015 | Fri Jan 02 03:49:41 2015
+    0 | 10019 |   100191 | It's some text, that is for number 100191 | 01-02-2015 | Fri Jan 02 03:49:51 2015
+    0 | 10020 |   100201 | It's some text, that is for number 100201 | 01-02-2015 | Fri Jan 02 03:50:01 2015
+    0 | 10021 |   100211 | It's some text, that is for number 100211 | 01-02-2015 | Fri Jan 02 03:50:11 2015
+    0 | 10022 |   100221 | It's some text, that is for number 100221 | 01-02-2015 | Fri Jan 02 03:50:21 2015
+    0 | 10023 |   100231 | It's some text, that is for number 100231 | 01-02-2015 | Fri Jan 02 03:50:31 2015
+    0 | 10024 |   100241 | It's some text, that is for number 100241 | 01-02-2015 | Fri Jan 02 03:50:41 2015
+    0 | 10025 |   100251 | It's some text, that is for number 100251 | 01-02-2015 | Fri Jan 02 03:50:51 2015
+    0 | 10026 |   100261 | It's some text, that is for number 100261 | 01-02-2015 | Fri Jan 02 03:51:01 2015
+    0 | 10027 |   100271 | It's some text, that is for number 100271 | 01-02-2015 | Fri Jan 02 03:51:11 2015
+    0 | 10028 |   100281 | It's some text, that is for number 100281 | 01-02-2015 | Fri Jan 02 03:51:21 2015
+    0 | 10029 |   100291 | It's some text, that is for number 100291 | 01-02-2015 | Fri Jan 02 03:51:31 2015
+    0 | 10030 |   100301 | It's some text, that is for number 100301 | 01-02-2015 | Fri Jan 02 03:51:41 2015
+(30 rows)
+
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 90000 LIMIT 30;
+ part | offs  | some_int |                 some_text                 | some_date  |        some_time         
+------+-------+----------+-------------------------------------------+------------+--------------------------
+    0 | 90001 |   900011 | It's some text, that is for number 900011 | 01-11-2015 | Sun Jan 11 10:00:11 2015
+    0 | 90002 |   900021 | It's some text, that is for number 900021 | 01-11-2015 | Sun Jan 11 10:00:21 2015
+    0 | 90003 |   900031 | It's some text, that is for number 900031 | 01-11-2015 | Sun Jan 11 10:00:31 2015
+    0 | 90004 |   900041 | It's some text, that is for number 900041 | 01-11-2015 | Sun Jan 11 10:00:41 2015
+    0 | 90005 |   900051 | It's some text, that is for number 900051 | 01-11-2015 | Sun Jan 11 10:00:51 2015
+    0 | 90006 |   900061 | It's some text, that is for number 900061 | 01-11-2015 | Sun Jan 11 10:01:01 2015
+    0 | 90007 |   900071 | It's some text, that is for number 900071 | 01-11-2015 | Sun Jan 11 10:01:11 2015
+    0 | 90008 |   900081 | It's some text, that is for number 900081 | 01-11-2015 | Sun Jan 11 10:01:21 2015
+    0 | 90009 |   900091 | It's some text, that is for number 900091 | 01-11-2015 | Sun Jan 11 10:01:31 2015
+    0 | 90010 |   900101 | It's some text, that is for number 900101 | 01-11-2015 | Sun Jan 11 10:01:41 2015
+    0 | 90011 |   900111 | It's some text, that is for number 900111 | 01-11-2015 | Sun Jan 11 10:01:51 2015
+    0 | 90012 |   900121 | It's some text, that is for number 900121 | 01-11-2015 | Sun Jan 11 10:02:01 2015
+    0 | 90013 |   900131 | It's some text, that is for number 900131 | 01-11-2015 | Sun Jan 11 10:02:11 2015
+    0 | 90014 |   900141 | It's some text, that is for number 900141 | 01-11-2015 | Sun Jan 11 10:02:21 2015
+    0 | 90015 |   900151 | It's some text, that is for number 900151 | 01-11-2015 | Sun Jan 11 10:02:31 2015
+    0 | 90016 |   900161 | It's some text, that is for number 900161 | 01-11-2015 | Sun Jan 11 10:02:41 2015
+    0 | 90017 |   900171 | It's some text, that is for number 900171 | 01-11-2015 | Sun Jan 11 10:02:51 2015
+    0 | 90018 |   900181 | It's some text, that is for number 900181 | 01-11-2015 | Sun Jan 11 10:03:01 2015
+    0 | 90019 |   900191 | It's some text, that is for number 900191 | 01-11-2015 | Sun Jan 11 10:03:11 2015
+    0 | 90020 |   900201 | It's some text, that is for number 900201 | 01-11-2015 | Sun Jan 11 10:03:21 2015
+    0 | 90021 |   900211 | It's some text, that is for number 900211 | 01-11-2015 | Sun Jan 11 10:03:31 2015
+    0 | 90022 |   900221 | It's some text, that is for number 900221 | 01-11-2015 | Sun Jan 11 10:03:41 2015
+    0 | 90023 |   900231 | It's some text, that is for number 900231 | 01-11-2015 | Sun Jan 11 10:03:51 2015
+    0 | 90024 |   900241 | It's some text, that is for number 900241 | 01-11-2015 | Sun Jan 11 10:04:01 2015
+    0 | 90025 |   900251 | It's some text, that is for number 900251 | 01-11-2015 | Sun Jan 11 10:04:11 2015
+    0 | 90026 |   900261 | It's some text, that is for number 900261 | 01-11-2015 | Sun Jan 11 10:04:21 2015
+    0 | 90027 |   900271 | It's some text, that is for number 900271 | 01-11-2015 | Sun Jan 11 10:04:31 2015
+    0 | 90028 |   900281 | It's some text, that is for number 900281 | 01-11-2015 | Sun Jan 11 10:04:41 2015
+    0 | 90029 |   900291 | It's some text, that is for number 900291 | 01-11-2015 | Sun Jan 11 10:04:51 2015
+    0 | 90030 |   900301 | It's some text, that is for number 900301 | 01-11-2015 | Sun Jan 11 10:05:01 2015
+(30 rows)
+
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100000 LIMIT 30;
+ part |  offs  | some_int |               some_text                | some_date  |        some_time         
+------+--------+----------+----------------------------------------+------------+--------------------------
+    0 | 100001 |       11 | It's some text, that is for number 11  | 01-01-2015 | Thu Jan 01 00:00:11 2015
+    0 | 100002 |       21 | It's some text, that is for number 21  | 01-01-2015 | Thu Jan 01 00:00:21 2015
+    0 | 100003 |       31 | It's some text, that is for number 31  | 01-01-2015 | Thu Jan 01 00:00:31 2015
+    0 | 100004 |       41 | It's some text, that is for number 41  | 01-01-2015 | Thu Jan 01 00:00:41 2015
+    0 | 100005 |       51 | It's some text, that is for number 51  | 01-01-2015 | Thu Jan 01 00:00:51 2015
+    0 | 100006 |       61 | It's some text, that is for number 61  | 01-01-2015 | Thu Jan 01 00:01:01 2015
+    0 | 100007 |       71 | It's some text, that is for number 71  | 01-01-2015 | Thu Jan 01 00:01:11 2015
+    0 | 100008 |       81 | It's some text, that is for number 81  | 01-01-2015 | Thu Jan 01 00:01:21 2015
+    0 | 100009 |       91 | It's some text, that is for number 91  | 01-01-2015 | Thu Jan 01 00:01:31 2015
+    0 | 100010 |      101 | It's some text, that is for number 101 | 01-01-2015 | Thu Jan 01 00:01:41 2015
+    0 | 100011 |      111 | It's some text, that is for number 111 | 01-01-2015 | Thu Jan 01 00:01:51 2015
+    0 | 100012 |      121 | It's some text, that is for number 121 | 01-01-2015 | Thu Jan 01 00:02:01 2015
+    0 | 100013 |      131 | It's some text, that is for number 131 | 01-01-2015 | Thu Jan 01 00:02:11 2015
+    0 | 100014 |      141 | It's some text, that is for number 141 | 01-01-2015 | Thu Jan 01 00:02:21 2015
+    0 | 100015 |      151 | It's some text, that is for number 151 | 01-01-2015 | Thu Jan 01 00:02:31 2015
+    0 | 100016 |      161 | It's some text, that is for number 161 | 01-01-2015 | Thu Jan 01 00:02:41 2015
+    0 | 100017 |      171 | It's some text, that is for number 171 | 01-01-2015 | Thu Jan 01 00:02:51 2015
+    0 | 100018 |      181 | It's some text, that is for number 181 | 01-01-2015 | Thu Jan 01 00:03:01 2015
+    0 | 100019 |      191 | It's some text, that is for number 191 | 01-01-2015 | Thu Jan 01 00:03:11 2015
+    0 | 100020 |      201 | It's some text, that is for number 201 | 01-01-2015 | Thu Jan 01 00:03:21 2015
+    0 | 100021 |      211 | It's some text, that is for number 211 | 01-01-2015 | Thu Jan 01 00:03:31 2015
+    0 | 100022 |      221 | It's some text, that is for number 221 | 01-01-2015 | Thu Jan 01 00:03:41 2015
+    0 | 100023 |      231 | It's some text, that is for number 231 | 01-01-2015 | Thu Jan 01 00:03:51 2015
+    0 | 100024 |      241 | It's some text, that is for number 241 | 01-01-2015 | Thu Jan 01 00:04:01 2015
+    0 | 100025 |      251 | It's some text, that is for number 251 | 01-01-2015 | Thu Jan 01 00:04:11 2015
+    0 | 100026 |      261 | It's some text, that is for number 261 | 01-01-2015 | Thu Jan 01 00:04:21 2015
+    0 | 100027 |      271 | It's some text, that is for number 271 | 01-01-2015 | Thu Jan 01 00:04:31 2015
+    0 | 100028 |      281 | It's some text, that is for number 281 | 01-01-2015 | Thu Jan 01 00:04:41 2015
+    0 | 100029 |      291 | It's some text, that is for number 291 | 01-01-2015 | Thu Jan 01 00:04:51 2015
+    0 | 100030 |      301 | It's some text, that is for number 301 | 01-01-2015 | Thu Jan 01 00:05:01 2015
+(30 rows)
+

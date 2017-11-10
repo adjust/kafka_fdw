@@ -68,6 +68,49 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
    scanning: PARTITION = 1 OFFSET 6 
 (4 rows)
 
+-- run some memload
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
+select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
+ count 
+-------
+     1
+(1 row)
+
 -- check that we really have messages
 SELECT SUM(count) FROM (
 SELECT COUNT(*) FROM kafka_test_part WHERE part = 0 AND offs >= 0
