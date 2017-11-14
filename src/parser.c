@@ -2,10 +2,10 @@
 
 /*
  * Parse the char into separate attributes (fields)
- * Returns number of fields
+ * Returns number of fields or -1 in case of unterminated quoted string
  */
 int
-KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate)
+KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error)
 {
     char  delimc  = festate->parse_options.delim[0];
     char  quotec  = festate->parse_options.quote[0];
@@ -14,6 +14,8 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate)
     char *output_ptr;
     char *cur_ptr;
     char *line_end_ptr;
+
+    *unterminated_error = false;
 
     resetStringInfo(&festate->attribute_buf);
     /*
@@ -92,7 +94,13 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate)
             {
                 end_ptr = cur_ptr;
                 if (cur_ptr >= line_end_ptr)
-                    ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
+                {
+                    *unterminated_error = true;
+                    /* Terminatestring */
+                    *output_ptr = '\0';
+                    /* report a field less back */
+                    return fieldno;
+                }
 
                 c = *cur_ptr++;
 
@@ -183,7 +191,6 @@ KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, const char **values, int n
 
         if (val)
         {
-            DEBUGLOG("VAL is %s", val);
             /*
              * Make a preliminary pass to discover if it needs quoting
              */

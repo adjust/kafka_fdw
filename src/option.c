@@ -29,6 +29,8 @@ static const struct KafkaFdwOption valid_options[] = {
     { "topic", ForeignTableRelationId, true },
     { "batch_size", ForeignTableRelationId, true },
     { "buffer_delay", ForeignTableRelationId, true },
+    { "strict", ForeignTableRelationId, true },
+    { "ignore_junk", ForeignTableRelationId, true },
 
     /* Format options */
     /* oids option is not supported */
@@ -42,6 +44,8 @@ static const struct KafkaFdwOption valid_options[] = {
     { "force_null", AttributeRelationId, false },
     { "offset", AttributeRelationId, false },
     { "partition", AttributeRelationId, false },
+    { "junk", AttributeRelationId, false },
+    { "junk_error", AttributeRelationId, false },
     /*
      * force_quote is not supported by kafka_fdw because it's for COPY TO for now.
      */
@@ -54,11 +58,9 @@ static const struct KafkaFdwOption valid_options[] = {
  * Helper functions
  */
 
-static bool
-is_valid_option(const char *keyword, Oid context);
+static bool is_valid_option(const char *keyword, Oid context);
 
-static void
-get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options);
+static void get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options);
 
 /*
  * Validate the generic options given to a FOREIGN DATA WRAPPER, SERVER,
@@ -215,10 +217,6 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
             if (parse_options->file_encoding >= 0)
                 ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options")));
             parse_options->file_encoding = pg_char_to_encoding(defGetString(defel));
-            if (parse_options->file_encoding < 0)
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("argument to option \"%s\" must be a valid encoding name", defel->defname)));
         }
     }
 
@@ -353,7 +351,7 @@ KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
 
     /* Support external use for option sanity checking */
     if (kafka_options == NULL)
-        kafka_options = &(KafkaOptions){ .offset_attnum = -1, .partition_attnum = -1 };
+        kafka_options = &(KafkaOptions){ .offset_attnum = -1, .partition_attnum = -1, .junk_attnum = -1 };
 
     foreach (option, options)
     {
@@ -393,10 +391,21 @@ KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
                   ERROR,
                   (errcode(ERRCODE_SYNTAX_ERROR), errmsg("%s requires a non-negative integer value", def->defname)));
         }
+        else if (strcmp(def->defname, "strict") == 0)
+        {
+            kafka_options->strict = defGetBoolean(def);
+        }
+        else if (strcmp(def->defname, "ignore_junk") == 0)
+        {
+            kafka_options->ignore_junk = defGetBoolean(def);
+        }
     }
 
     if (relid != InvalidOid)
         get_kafka_fdw_attribute_options(relid, kafka_options);
+
+    kafka_options->ignore_junk =
+      kafka_options->ignore_junk || kafka_options->junk_attnum != -1 || kafka_options->junk_error_attnum != -1;
 }
 
 /* reads per attribute options into kafka options */
@@ -409,9 +418,10 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
     AttrNumber natts;
     AttrNumber attnum;
 
-    rel       = heap_open(relid, AccessShareLock);
-    tupleDesc = RelationGetDescr(rel);
-    natts     = tupleDesc->natts;
+    rel                          = heap_open(relid, AccessShareLock);
+    tupleDesc                    = RelationGetDescr(rel);
+    natts                        = tupleDesc->natts;
+    kafka_options->num_parse_col = 0;
 
     /* Retrieve FDW options for all user-defined attributes. */
     for (attnum = 1; attnum <= natts; attnum++)
@@ -419,6 +429,7 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
         Form_pg_attribute attr = tupleDesc->attrs[attnum - 1];
         List *            options;
         ListCell *        lc;
+        kafka_options->num_parse_col++;
 
         /* Skip dropped attributes. */
         if (attr->attisdropped)
@@ -431,6 +442,8 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
 
             if (strcmp(def->defname, "partition") == 0)
             {
+                if (kafka_options->partition_attnum != -1)
+                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("duplicate option partition")));
                 if (defGetBoolean(def))
                 {
                     kafka_options->partition_attnum = attnum;
@@ -438,12 +451,39 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
             }
             else if (strcmp(def->defname, "offset") == 0)
             {
+                if (kafka_options->offset_attnum != -1)
+                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("duplicate option offset")));
                 if (defGetBoolean(def))
                     kafka_options->offset_attnum = attnum;
+            }
+            else if (strcmp(def->defname, "junk") == 0)
+            {
+                if (kafka_options->junk_attnum != -1)
+                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("duplicate option junk")));
+                if (defGetBoolean(def))
+                    kafka_options->junk_attnum = attnum;
+            }
+            else if (strcmp(def->defname, "junk_error") == 0)
+            {
+                if (kafka_options->junk_error_attnum != -1)
+                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("duplicate option junk_error")));
+                if (defGetBoolean(def))
+                    kafka_options->junk_error_attnum = attnum;
             }
             /* maybe in future handle other options here */
         }
     }
+
+    /* calculate number of parsable columns */
+
+    if (kafka_options->partition_attnum != -1)
+        kafka_options->num_parse_col--;
+    if (kafka_options->offset_attnum != -1)
+        kafka_options->num_parse_col--;
+    if (kafka_options->junk_attnum != -1)
+        kafka_options->num_parse_col--;
+    if (kafka_options->junk_error_attnum != -1)
+        kafka_options->num_parse_col--;
 
     /*
         if (kafka_options->partition_attnum == -1)

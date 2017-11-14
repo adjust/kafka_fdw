@@ -12,7 +12,10 @@ MODULE_big   = $(EXTENSION)
 OBJS         =  $(patsubst %.c,%.o,$(wildcard src/*.c))
 PG_CONFIG   ?= pg_config
 PG_CPPFLAGS  = -std=c99 -Wall -Wextra -Wno-unused-parameter
+
+ifndef NOINIT
 REGRESS_PREP = prep_kafka
+endif
 
 ifdef DEBUG
 PG_CPPFLAGS+= -DDO_DEBUG
