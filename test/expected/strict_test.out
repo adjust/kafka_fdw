@@ -8,8 +8,42 @@ CREATE FOREIGN TABLE kafka_strict (
 )
 SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress_junk', batch_size '30', buffer_delay '100', strict 'true');
-SELECT * FROM kafka_strict WHERE offs>=0 and part=0;
+SELECT * FROM kafka_strict WHERE offs=0 and part=0 LIMIT 1;
+ part | offs | some_int |  some_text   | some_date  |        some_time         
+------+------+----------+--------------+------------+--------------------------
+    0 |    0 |       91 | correct line | 01-01-2015 | Thu Jan 01 01:31:00 2015
+(1 row)
+
+SELECT * FROM kafka_strict WHERE offs=1 and part=0 LIMIT 1;
 ERROR:  extra data after last expected column
+SELECT * FROM kafka_strict WHERE offs=2 and part=0 LIMIT 1;
+ERROR:  extra data after last expected column
+SELECT * FROM kafka_strict WHERE offs=3 and part=0 LIMIT 1;
+ part | offs | some_int |              some_text               | some_date  | some_time 
+------+------+----------+--------------------------------------+------------+-----------
+    0 |    3 |      301 | correct line although last line null | 01-01-2015 | 
+(1 row)
+
+SELECT * FROM kafka_strict WHERE offs=4 and part=0 LIMIT 1;
+ERROR:  invalid input syntax for type date: "invalid_date"
+SELECT * FROM kafka_strict WHERE offs=5 and part=0 LIMIT 1;
+ERROR:  unterminated CSV quoted field
+SELECT * FROM kafka_strict WHERE offs=6 and part=0 LIMIT 1;
+ part | offs | some_int |  some_text   | some_date  |        some_time         
+------+------+----------+--------------+------------+--------------------------
+    0 |    6 |      421 | correct line | 01-01-2015 | Thu Jan 01 07:01:00 2015
+(1 row)
+
+SELECT * FROM kafka_strict WHERE offs=8 and part=0 LIMIT 1;
+ part | offs | some_int |  some_text   | some_date  |        some_time         
+------+------+----------+--------------+------------+--------------------------
+    0 |    8 |      521 | correct line | 01-01-2015 | Thu Jan 01 08:41:00 2015
+(1 row)
+
+SELECT * FROM kafka_strict WHERE offs=9 and part=0 LIMIT 1;
+ERROR:  extra data after last expected column
+SELECT * FROM kafka_strict WHERE offs=10 and part=0 LIMIT 1;
+ERROR:  unterminated CSV quoted field
 CREATE FOREIGN TABLE kafka_ignore_junk (
     part int OPTIONS (partition 'true'),
     offs bigint OPTIONS (offset 'true'),
@@ -35,4 +69,79 @@ SELECT * FROM kafka_ignore_junk WHERE offs>=0 and part=0;
     0 |    9 |          | invalid number, invalid date and extra data |            | Thu Jan 01 09:31:00 2015
     0 |   10 |          |                                             |            | 
 (11 rows)
+
+CREATE FOREIGN TABLE kafka_strict_json (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    some_int int OPTIONS (json 'int_val'),
+    text_val text,
+    some_date date OPTIONS (json 'date_val'),
+    time_val timestamp
+)
+SERVER kafka_server OPTIONS
+    (format 'json', topic 'contrib_regress_json_junk', batch_size '30', buffer_delay '100', strict 'true');
+SELECT * FROM kafka_strict_json WHERE offs=0 and part=0 LIMIT 1;
+ part | offs | some_int |   text_val   | some_date  |         time_val         
+------+------+----------+--------------+------------+--------------------------
+    0 |    0 |   999741 | correct line | 01-12-2015 | Mon Jan 12 13:42:21 2015
+(1 row)
+
+SELECT * FROM kafka_strict_json WHERE offs=1 and part=0 LIMIT 1;
+ERROR:  extra data after last expected column
+SELECT * FROM kafka_strict_json WHERE offs=2 and part=0 LIMIT 1;
+ERROR:  extra data after last expected column
+SELECT * FROM kafka_strict_json WHERE offs=3 and part=0 LIMIT 1;
+ERROR:  invalid input syntax for type date: "foob"
+SELECT * FROM kafka_strict_json WHERE offs=4 and part=0 LIMIT 1;
+ERROR:  invalid input syntax for type json
+DETAIL:  Expected ":", but found "2015".
+CONTEXT:  JSON data, line 1: ...e)", "date_val" : "2015-01-12", "time_val : "2015...
+SELECT * FROM kafka_strict_json WHERE offs=5 and part=0 LIMIT 1;
+ part | offs | some_int |   text_val   | some_date  |         time_val         
+------+------+----------+--------------+------------+--------------------------
+    0 |    5 |   999801 | correct line | 01-12-2015 | Mon Jan 12 13:43:21 2015
+(1 row)
+
+SELECT * FROM kafka_strict_json WHERE offs=6 and part=0 LIMIT 1;
+ERROR:  value "9998119999999999" is out of range for type integer
+SELECT * FROM kafka_strict_json WHERE offs=8 and part=0 LIMIT 1;
+ERROR:  extra data after last expected column
+SELECT * FROM kafka_strict_json WHERE offs=9 and part=0 LIMIT 1;
+ERROR:  invalid input syntax for type timestamp: ""
+SELECT * FROM kafka_strict_json WHERE offs=10 and part=0 LIMIT 1;
+ part | offs | some_int |        text_val        | some_date  | time_val 
+------+------+----------+------------------------+------------+----------
+    0 |   10 |   999851 | correct line null time | 01-12-2015 | 
+(1 row)
+
+SELECT * FROM kafka_strict_json WHERE offs=11 and part=0 LIMIT 1;
+ERROR:  invalid input syntax for type json
+DETAIL:  Expected JSON value, but found "}".
+CONTEXT:  JSON data, line 1: ... json", "date_val" : "2015-01-12", "time_val" : }
+CREATE FOREIGN TABLE kafka_ignore_junk_json (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    some_int int OPTIONS (json 'int_val'),
+    text_val text,
+    some_date date OPTIONS (json 'date_val'),
+    time_val timestamp
+)
+SERVER kafka_server OPTIONS
+    (format 'json', topic 'contrib_regress_json_junk', batch_size '30', buffer_delay '100', ignore_junk 'true');
+SELECT * FROM kafka_ignore_junk_json WHERE offs>=0 and part=0;
+ part | offs | some_int |                  text_val                   | some_date  |         time_val         
+------+------+----------+---------------------------------------------+------------+--------------------------
+    0 |    0 |   999741 | correct line                                | 01-12-2015 | Mon Jan 12 13:42:21 2015
+    0 |    1 |   999751 | additional data                             | 01-12-2015 | Mon Jan 12 13:42:31 2015
+    0 |    2 |   999761 | additional data although null               | 01-12-2015 | Mon Jan 12 13:42:41 2015
+    0 |    3 |   999781 | invalidat date                              |            | Mon Jan 12 13:42:51 2015
+    0 |    4 |          |                                             |            | 
+    0 |    5 |   999801 | correct line                                | 01-12-2015 | Mon Jan 12 13:43:21 2015
+    0 |    6 |          | invalid number                              | 01-12-2015 | Mon Jan 12 13:43:31 2015
+    0 |    7 |   999821 | correct line                                | 01-12-2015 | Mon Jan 12 13:43:41 2015
+    0 |    8 |          | invalid number, invalid date and extra data |            | Mon Jan 12 13:43:51 2015
+    0 |    9 |   999841 | empty time                                  | 01-12-2015 | 
+    0 |   10 |   999851 | correct line null time                      | 01-12-2015 | 
+    0 |   11 |          |                                             |            | 
+(12 rows)
 

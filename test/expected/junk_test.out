@@ -10,9 +10,20 @@ CREATE FOREIGN TABLE kafka_test_junk (
 )
 SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress_junk', batch_size '30', buffer_delay '100');
+CREATE FOREIGN TABLE kafka_test_junk_json (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    int_val int,
+    text_val text,
+    date_val date,
+    time_val timestamp,
+    junk text OPTIONS (junk 'true'),
+    junk_err text OPTIONS (junk_error 'true')
+)
+SERVER kafka_server OPTIONS
+    (format 'json', topic 'contrib_regress_json_junk', batch_size '30', buffer_delay '100');
 \x on
-with kafkadata as ( SELECT * FROM kafka_test_junk WHERE offs>=0 and part=0 )
-SELECT part, offs, some_int, some_text, some_date, some_time, junk, string_to_array(junk_err, E'\n')  FROM kafkadata;
+SELECT part, offs, some_int, some_text, some_date, some_time, junk, string_to_array(junk_err, E'\n')  FROM kafka_test_junk WHERE offs>=0 and part=0 ;
 -[ RECORD 1 ]---+-------------------------------------------------------------------------------------------------------------------------------------------
 part            | 0
 offs            | 0
@@ -112,4 +123,114 @@ some_date       |
 some_time       | 
 junk            | "401,unterminated string,01-01-2015,Thu Jan 01 06:41:00 2015
 string_to_array | {"unterminated CSV quoted field"}
+
+SELECT part, offs, int_val, text_val, date_val, time_val, junk, string_to_array(junk_err, E'\n')  FROM kafka_test_junk_json WHERE offs>=0 and part=0 ;
+-[ RECORD 1 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 0
+int_val         | 999741
+text_val        | correct line
+date_val        | 01-12-2015
+time_val        | Mon Jan 12 13:42:21 2015
+junk            | 
+string_to_array | 
+-[ RECORD 2 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 1
+int_val         | 999751
+text_val        | additional data
+date_val        | 01-12-2015
+time_val        | Mon Jan 12 13:42:31 2015
+junk            | {"int_val" : 999751, "text_val" : "additional data", "date_val" : "2015-01-12", "time_val" : "2015-01-12T13:42:31", "more_val": "to much data"}
+string_to_array | {"extra data after last expected column"}
+-[ RECORD 3 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 2
+int_val         | 999761
+text_val        | additional data although null
+date_val        | 01-12-2015
+time_val        | Mon Jan 12 13:42:41 2015
+junk            | {"int_val" : 999761, "text_val" : "additional data although null", "date_val" : "2015-01-12", "time_val" : "2015-01-12T13:42:41", "more_val": null}
+string_to_array | {"extra data after last expected column"}
+-[ RECORD 4 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 3
+int_val         | 999781
+text_val        | invalidat date
+date_val        | 
+time_val        | Mon Jan 12 13:42:51 2015
+junk            | {"int_val" : 999781, "text_val" : "invalidat date", "date_val" : "foob", "time_val" : "2015-01-12T13:43:01", "time_val": "2015-01-12T13:42:51"}
+string_to_array | {"invalid input syntax for type date: \"foob\""}
+-[ RECORD 5 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 4
+int_val         | 
+text_val        | 
+date_val        | 
+time_val        | 
+junk            | {"int_val" : 999791, "text_val" : "invalid json (unterminated quote)", "date_val" : "2015-01-12", "time_val : "2015-01-12T13:43:11"}
+string_to_array | {"invalid input syntax for type json"}
+-[ RECORD 6 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 5
+int_val         | 999801
+text_val        | correct line
+date_val        | 01-12-2015
+time_val        | Mon Jan 12 13:43:21 2015
+junk            | 
+string_to_array | 
+-[ RECORD 7 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 6
+int_val         | 
+text_val        | invalid number
+date_val        | 01-12-2015
+time_val        | Mon Jan 12 13:43:31 2015
+junk            | {"int_val" : 9998119999999999, "text_val" : "invalid number", "date_val" : "2015-01-12", "time_val" : "2015-01-12T13:43:31"}
+string_to_array | {"value \"9998119999999999\" is out of range for type integer"}
+-[ RECORD 8 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 7
+int_val         | 999821
+text_val        | correct line
+date_val        | 01-12-2015
+time_val        | Mon Jan 12 13:43:41 2015
+junk            | 
+string_to_array | 
+-[ RECORD 9 ]---+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 8
+int_val         | 
+text_val        | invalid number, invalid date and extra data
+date_val        | 
+time_val        | Mon Jan 12 13:43:51 2015
+junk            | {"int_val" : "9998119999999999",  "text_val" : "invalid number, invalid date and extra data", "date_val" : "2015-13-13", "time_val" : "2015-01-12T13:43:51", "foo": "just to much"}
+string_to_array | {"extra data after last expected column","value \"9998119999999999\" is out of range for type integer","date/time field value out of range: \"2015-13-13\""}
+-[ RECORD 10 ]--+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 9
+int_val         | 999841
+text_val        | empty time
+date_val        | 01-12-2015
+time_val        | 
+junk            | {"int_val" : 999841, "text_val" : "empty time" , "date_val" : "2015-01-12", "time_val" : ""}
+string_to_array | {"invalid input syntax for type timestamp: \"\""}
+-[ RECORD 11 ]--+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 10
+int_val         | 999851
+text_val        | correct line null time
+date_val        | 01-12-2015
+time_val        | 
+junk            | 
+string_to_array | 
+-[ RECORD 12 ]--+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+part            | 0
+offs            | 11
+int_val         | 
+text_val        | 
+date_val        | 
+time_val        | 
+junk            | {"int_val" : 999871, "invalid json no time" : "invalid json", "date_val" : "2015-01-12", "time_val" : }
+string_to_array | {"invalid input syntax for type json"}
 
