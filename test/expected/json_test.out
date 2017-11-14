@@ -1,131 +1,15 @@
 -- standard setup
-CREATE FOREIGN TABLE kafka_test_part (
+CREATE FOREIGN TABLE kafka_test_json (
     part int OPTIONS (partition 'true'),
     offs bigint OPTIONS (offset 'true'),
-    some_int int,
-    some_text text,
-    some_date date,
-    some_time timestamp
+    some_int int OPTIONS (json 'int_val'),
+    some_text text OPTIONS (json 'text_val'),
+    some_date date OPTIONS (json 'date_val'),
+    some_time timestamp OPTIONS (json 'time_val')
 )
 SERVER kafka_server OPTIONS
-    (format 'csv', topic 'contrib_regress4', batch_size '30', buffer_delay '100');
-CREATE FOREIGN TABLE kafka_test_single_part (
-    part int OPTIONS (partition 'true'),
-    offs bigint OPTIONS (offset 'true'),
-    some_int int,
-    some_text text,
-    some_date date,
-    some_time timestamp
-)
-SERVER kafka_server OPTIONS
-    (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
--- check that we parse the queries right or error out if needed
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
-              QUERY PLAN               
----------------------------------------
- Foreign Scan on kafka_test_part
-   Filter: ((offs = 1) AND (part = 0))
-   Kafka topic: contrib_regress4
-   scanning: PARTITION = 0 OFFSET 1 
-(4 rows)
-
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 AND offs > 4 AND offs > 10 AND offs < 100;
-                                        QUERY PLAN                                         
--------------------------------------------------------------------------------------------
- Foreign Scan on kafka_test_part
-   Filter: ((offs > 4) AND (offs > 10) AND (offs < 100) AND (part = 1) AND (some_int = 3))
-   Kafka topic: contrib_regress4
-   scanning: PARTITION = 1 OFFSET 11 
-(4 rows)
-
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (part,offs)=(2,1);
-ERROR:  scanning of multiple partitions not allowed
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(2,2)) ;
-ERROR:  scanning of multiple partitions not allowed
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,2)) ;
-ERROR:  scanning of multiple offsets not allowed
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
-ERROR:  offset and partition must be set in WHERE clause
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
-              QUERY PLAN               
----------------------------------------
- Foreign Scan on kafka_test_part
-   Filter: ((offs > 5) AND (part = 1))
-   Kafka topic: contrib_regress4
-   scanning: PARTITION = 1 OFFSET 6 
-(4 rows)
-
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
-              QUERY PLAN               
----------------------------------------
- Foreign Scan on kafka_test_part
-   Filter: ((5 < offs) AND (1 = part))
-   Kafka topic: contrib_regress4
-   scanning: PARTITION = 1 OFFSET 6 
-(4 rows)
-
--- run some memload
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
-select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
- count 
--------
-     1
-(1 row)
-
--- check that we really have messages
-SELECT SUM(count) FROM (
-SELECT COUNT(*) FROM kafka_test_part WHERE part = 0 AND offs >= 0
-UNION ALL
-SELECT COUNT(*) FROM kafka_test_part WHERE part = 1 AND offs >= 0
-UNION ALL
-SELECT COUNT(*) FROM kafka_test_part WHERE part = 2 AND offs >= 0
-UNION ALL
-SELECT COUNT(*) FROM kafka_test_part WHERE part = 3 AND offs >= 0
-UNION ALL
-SELECT COUNT(*) FROM kafka_test_part WHERE part = 4 AND offs >= 0
-)t;
-  sum   
---------
- 100000
-(1 row)
-
--- see that we can properly parse messages
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 0 LIMIT 30;
+    (format 'json', topic 'contrib_regress_json', batch_size '30', buffer_delay '100');
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 0 LIMIT 30;
  part | offs | some_int |               some_text                | some_date  |        some_time         
 ------+------+----------+----------------------------------------+------------+--------------------------
     0 |    1 |       11 | It's some text, that is for number 11  | 01-01-2015 | Thu Jan 01 00:00:11 2015
@@ -160,7 +44,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 0 LIMIT 30;
     0 |   30 |      301 | It's some text, that is for number 301 | 01-01-2015 | Thu Jan 01 00:05:01 2015
 (30 rows)
 
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10 LIMIT 30;
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 10 LIMIT 30;
  part | offs | some_int |               some_text                | some_date  |        some_time         
 ------+------+----------+----------------------------------------+------------+--------------------------
     0 |   11 |      111 | It's some text, that is for number 111 | 01-01-2015 | Thu Jan 01 00:01:51 2015
@@ -195,7 +79,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10 LIMIT 30;
     0 |   40 |      401 | It's some text, that is for number 401 | 01-01-2015 | Thu Jan 01 00:06:41 2015
 (30 rows)
 
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100 LIMIT 30;
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 100 LIMIT 30;
  part | offs | some_int |                some_text                | some_date  |        some_time         
 ------+------+----------+-----------------------------------------+------------+--------------------------
     0 |  101 |     1011 | It's some text, that is for number 1011 | 01-01-2015 | Thu Jan 01 00:16:51 2015
@@ -230,7 +114,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100 LIMIT 30;
     0 |  130 |     1301 | It's some text, that is for number 1301 | 01-01-2015 | Thu Jan 01 00:21:41 2015
 (30 rows)
 
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 1000 LIMIT 30;
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 1000 LIMIT 30;
  part | offs | some_int |                some_text                 | some_date  |        some_time         
 ------+------+----------+------------------------------------------+------------+--------------------------
     0 | 1001 |    10011 | It's some text, that is for number 10011 | 01-01-2015 | Thu Jan 01 02:46:51 2015
@@ -265,7 +149,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 1000 LIMIT 30;
     0 | 1030 |    10301 | It's some text, that is for number 10301 | 01-01-2015 | Thu Jan 01 02:51:41 2015
 (30 rows)
 
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10000 LIMIT 30;
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 10000 LIMIT 30;
  part | offs  | some_int |                 some_text                 | some_date  |        some_time         
 ------+-------+----------+-------------------------------------------+------------+--------------------------
     0 | 10001 |   100011 | It's some text, that is for number 100011 | 01-02-2015 | Fri Jan 02 03:46:51 2015
@@ -300,7 +184,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10000 LIMIT 30;
     0 | 10030 |   100301 | It's some text, that is for number 100301 | 01-02-2015 | Fri Jan 02 03:51:41 2015
 (30 rows)
 
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 90000 LIMIT 30;
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 90000 LIMIT 30;
  part | offs  | some_int |                 some_text                 | some_date  |        some_time         
 ------+-------+----------+-------------------------------------------+------------+--------------------------
     0 | 90001 |   900011 | It's some text, that is for number 900011 | 01-11-2015 | Sun Jan 11 10:00:11 2015
@@ -335,7 +219,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 90000 LIMIT 30;
     0 | 90030 |   900301 | It's some text, that is for number 900301 | 01-11-2015 | Sun Jan 11 10:05:01 2015
 (30 rows)
 
-SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100000 LIMIT 30;
+SELECT * FROM kafka_test_json WHERE part = 0 AND offs > 100000 LIMIT 30;
  part | offs | some_int | some_text | some_date | some_time 
 ------+------+----------+-----------+-----------+-----------
 (0 rows)

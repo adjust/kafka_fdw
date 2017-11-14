@@ -14,7 +14,6 @@
 #include "access/sysattr.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
-#include "commands/copy.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
@@ -46,6 +45,10 @@
 #define DEFAULT_KAFKA_OPTIONS                                                                                          \
     .batch_size = 1000, .buffer_delay = 100, .offset_attnum = -1, .partition_attnum = -1, .junk_attnum = -1,           \
     .junk_error_attnum = -1, .strict = false, .num_parse_col = 0, .ignore_junk = false
+
+#define parsable_attnum(_attn, _kop)                                                                                   \
+    (_attn != _kop.junk_attnum && _attn != _kop.junk_error_attnum && _attn != _kop.partition_attnum &&                 \
+     _attn != _kop.offset_attnum)
 
 enum kafka_op
 {
@@ -92,6 +95,7 @@ typedef struct ParseOptions
     int   file_encoding;        /* file or remote side's character encoding */
     bool  need_transcoding;     /* file encoding diff from server? */
     bool  csv_mode;             /* Comma Separated Value format? */
+    bool  json_mode;            /* json Value format? */
     bool  binary;               /* Binary format? */
     bool  header_line;          /* CSV header line? */
     char *null_print;           /* NULL marker string (server encoding!) */
@@ -144,6 +148,8 @@ typedef struct KafkaFdwExecutionState
     Oid *                typioparams;        /* array of element types for in_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
     List *               partition_list;     /* integer list of partitions */
+    StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
+    char **              attnames;           /* pointer into attname_buf */
 
 } KafkaFdwExecutionState;
 
@@ -166,6 +172,8 @@ typedef struct KafkaFdwModifyState
     Oid *                typioparams;        /* array of element types for out_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
     List *               partition_list;     /* integer list of partitions */
+    StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
+    char **              attnames;           /* pointer into attname_buf */
 
 } KafkaFdwModifyState;
 
@@ -175,6 +183,7 @@ void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
 void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
 int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
 bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
-void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, const char **values, int num_values);
-
+void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+int  KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
+void KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot);
 #endif

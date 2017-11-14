@@ -46,6 +46,7 @@ static const struct KafkaFdwOption valid_options[] = {
     { "partition", AttributeRelationId, false },
     { "junk", AttributeRelationId, false },
     { "junk_error", AttributeRelationId, false },
+    { "json", AttributeRelationId, false },
     /*
      * force_quote is not supported by kafka_fdw because it's for COPY TO for now.
      */
@@ -160,11 +161,12 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
                 /* default format */;
             else if (strcmp(fmt, "csv") == 0)
                 parse_options->csv_mode = true;
+            else if (strcmp(fmt, "json") == 0)
+                parse_options->json_mode = true;
             else if (strcmp(fmt, "binary") == 0)
                 parse_options->binary = true;
             else
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("COPY format \"%s\" not recognized", fmt)));
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("format \"%s\" not recognized", fmt)));
         }
         else if (strcmp(defel->defname, "delimiter") == 0)
         {
@@ -341,7 +343,6 @@ is_valid_option(const char *option, Oid context)
 
 /*
  * Separate out brokers, topic and column-specific options, since
- * ProcessCopyOptions won't accept them.
  */
 void
 KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)

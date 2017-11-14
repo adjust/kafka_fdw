@@ -18,7 +18,7 @@ CREATE FOREIGN TABLE kafka_err_test (
     some_time timestamp
 )
 SERVER kafka_server2 OPTIONS 
-    (format 'json', batch_size '30', buffer_delay '100');
+    (format 'foo', batch_size '30', buffer_delay '100');
 ROLLBACK;
 
 

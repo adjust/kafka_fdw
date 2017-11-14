@@ -59,7 +59,7 @@ SELECT COUNT(*) FROM kafka_test_part WHERE part = 4 AND offs >= 0
 -- see that we can properly parse messages
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 0 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10 LIMIT 30;
-SELECT * FROM kafka_test_single_part WHERE part = 1 AND offs > 100 LIMIT 30;
+SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 1000 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10000 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 90000 LIMIT 30;

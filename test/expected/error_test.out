@@ -14,8 +14,8 @@ CREATE FOREIGN TABLE kafka_err_test (
     some_time timestamp
 )
 SERVER kafka_server2 OPTIONS 
-    (format 'json', batch_size '30', buffer_delay '100');
-ERROR:  COPY format "json" not recognized
+    (format 'foo', batch_size '30', buffer_delay '100');
+ERROR:  format "foo" not recognized
 ROLLBACK;
 /*
 -- no partition and offset colum should error out

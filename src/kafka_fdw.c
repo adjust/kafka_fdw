@@ -62,6 +62,8 @@ static void kafkaEndForeignModify(EState *estate, ResultRelInfo *rinfo);
 
 static int kafkaIsForeignRelUpdatable(Relation rel);
 
+static char *getJsonAttname(Form_pg_attribute attr, StringInfo buff);
+
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
  * to my callback routines.
@@ -406,8 +408,10 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
-    /* initialize attribute buffer */
+
+    /* initialize attribute buffer for user in iterate*/
     initStringInfo(&festate->attribute_buf);
+
     /* when we have junk field we also need junk_buf */
     if (kafka_options.junk_error_attnum != -1)
         initStringInfo(&festate->junk_buf);
@@ -419,6 +423,13 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     /* allocate enough space for fields */
     festate->max_fields = num_phys_attrs;
     festate->raw_fields = palloc0(festate->max_fields * sizeof(char *));
+
+    /* if we use json we need attnames */
+    if (parse_options.json_mode)
+    {
+        initStringInfo(&festate->attname_buf);
+        festate->attnames = palloc0(festate->max_fields * sizeof(char *));
+    }
 
     /*
      * Pick up the required catalog information for each attribute in the
@@ -443,6 +454,9 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
         else
             getTypeInputInfo(attr[attnum - 1]->atttypid, &in_func_oid, &typioparams[attnum - 1]);
         fmgr_info(in_func_oid, &in_functions[attnum - 1]);
+
+        if (parse_options.json_mode)
+            festate->attnames[attnum - 1] = getJsonAttname(attr[attnum - 1], &festate->attname_buf);
     }
 
     /* We keep those variables in festate. */
@@ -500,6 +514,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     TupleDesc               tupDesc;
     Form_pg_attribute *     attr;
     KafkaOptions *          kafka_options = &festate->kafka_options;
+    ParseOptions *          parse_options = &festate->parse_options;
     bool                    catched_error = false;
     bool                    ignore_junk   = kafka_options->ignore_junk;
     MemoryContext           ccxt          = CurrentMemoryContext;
@@ -570,11 +585,18 @@ kafkaIterateForeignScan(ForeignScanState *node)
     nulls  = palloc0(num_attrs * sizeof(bool));
 
     int  fldct;
-    bool error;
-    fldct = KafkaReadAttributesCSV(message->payload, message->len, festate, &error);
+    bool error = false;
+    DEBUGLOG("message: %s", message->payload);
+
+    if (parse_options->csv_mode)
+        fldct = KafkaReadAttributesCSV(message->payload, message->len, festate, &error);
+    else if (parse_options->json_mode)
+    {
+        fldct = KafkaReadAttributesJson(message->payload, message->len, festate, &error);
+    }
 
     /* unterminated quote, total junk */
-    if (error)
+    if (error && parse_options->csv_mode)
     {
         if (kafka_options->strict)
             ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
@@ -585,6 +607,11 @@ kafkaIterateForeignScan(ForeignScanState *node)
                 appendStringInfoString(&festate->junk_buf, "unterminated CSV quoted field");
             MemSet(nulls, true, num_attrs);
         }
+    }
+    else if (error && parse_options->json_mode)
+    {
+        catched_error = true;
+        MemSet(nulls, true, num_attrs);
     }
     /* to much data */
     else if (fldct > kafka_options->num_parse_col)
@@ -1026,6 +1053,14 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     n_params               = list_length(festate->attnumlist);
     festate->out_functions = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * n_params);
 
+    /* if we use json we need attnames and oids */
+    if (parse_options.json_mode)
+    {
+        initStringInfo(&festate->attname_buf);
+        festate->attnames    = palloc0(sizeof(char *) * n_params);
+        festate->typioparams = (Oid *) palloc(n_params * sizeof(Oid));
+    }
+
     initStringInfo(&festate->attribute_buf);
 
     prev = NULL;
@@ -1033,8 +1068,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     foreach (lc, festate->attnumlist)
     {
         int attnum = lfirst_int(lc);
-        if (attnum == festate->kafka_options.partition_attnum || attnum == festate->kafka_options.offset_attnum ||
-            attnum == festate->kafka_options.junk_attnum)
+        if (!parsable_attnum(attnum, kafka_options))
         {
             festate->attnumlist = list_delete_cell(festate->attnumlist, lc, prev);
         }
@@ -1046,6 +1080,14 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 
             getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
             fmgr_info(typefnoid, &festate->out_functions[num]);
+
+            if (parse_options.json_mode)
+            {
+                festate->attnames[num]    = getJsonAttname(attr, &festate->attname_buf);
+                festate->typioparams[num] = attr->atttypid;
+                DEBUGLOG("type oid %u", attr->atttypid);
+            }
+
             num++;
             prev = lc;
         }
@@ -1134,7 +1176,6 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
     resetStringInfo(&festate->attribute_buf);
 
     const char **values;
-    int          pindex    = 0;
     int          num_attrs = list_length(festate->attnumlist);
     values                 = (const char **) palloc(sizeof(char *) * num_attrs);
     int   partition        = RD_KAFKA_PARTITION_UA;
@@ -1144,27 +1185,17 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
 
     if (slot != NULL && festate->attnumlist != NIL)
     {
-        ListCell *lc;
-
-        foreach (lc, festate->attnumlist)
-        {
-            int attnum = lfirst_int(lc);
-
-            value = slot_getattr(slot, attnum, &isnull);
-            if (isnull)
-                values[pindex] = NULL;
-            else
-                values[pindex] = OutputFunctionCall(&festate->out_functions[pindex], value);
-
-            pindex++;
-        }
+        if (festate->parse_options.csv_mode)
+            KafkaWriteAttributesCSV(festate, slot);
+        else if (festate->parse_options.json_mode)
+            KafkaWriteAttributesJson(festate, slot);
     }
+
     /* fetch partition if given */
     value = slot_getattr(slot, festate->kafka_options.partition_attnum, &isnull);
     if (!isnull)
         partition = DatumGetInt32(value);
 
-    KafkaWriteAttributesCSV(festate, values, num_attrs);
     DEBUGLOG("CSV ROW: %s", festate->attribute_buf.data);
 
 retry:
@@ -1220,4 +1251,36 @@ kafkaEndForeignModify(EState *estate, ResultRelInfo *rinfo)
 
     /* Destroy the producer instance */
     rd_kafka_destroy(festate->kafka_handle);
+}
+
+/*
+    appends the attributes json option to buff and
+    returns a pointer to it
+    if no such option is found attributes attname is used
+*/
+static char *
+getJsonAttname(Form_pg_attribute attr, StringInfo buff)
+{
+    List *    options;
+    ListCell *lc;
+    int       cur_start = buff->len == 0 ? 0 : buff->len + 1;
+
+    if (buff->len != 0)
+        appendStringInfoChar(buff, '\0');
+
+    options = GetForeignColumnOptions(attr->attrelid, attr->attnum);
+    foreach (lc, options)
+    {
+        DefElem *def = (DefElem *) lfirst(lc);
+        if (strcmp(def->defname, "json") == 0)
+        {
+            appendStringInfoString(buff, defGetString(def));
+            return &buff->data[cur_start];
+        }
+    }
+
+    /* if we are here we did not find a json def so use attname */
+    appendStringInfoString(buff, NameStr(attr->attname));
+
+    return &buff->data[cur_start];
 }
