@@ -62,6 +62,9 @@ SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
 ```
 
+The offset and partition columns are special.  Due to the way Kafka works, we *must*
+specify these on all queries.
+
 ## Querying
 
 With the defined meta columns you can query like so:
@@ -69,6 +72,12 @@ With the defined meta columns you can query like so:
 ```
 SELECT * FROM kafka_test WHERE part = 0 AND offs > 1000 LIMIT 60;
 ```
+
+Here offs is the offset column.  If we fail to specify it, we will get an error
+stating we must specify the offset.
+
+Querying across partitions is not currently supported either.  Each query MUST
+apply to only one partition.
 
 ## Error handling
 
