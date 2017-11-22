@@ -1,0 +1,49 @@
+CREATE SERVER kafka_server_multi
+FOREIGN DATA WRAPPER kafka_fdw
+OPTIONS (brokers 'foo:1234,localhost:9092,bar:9784');
+CREATE USER MAPPING FOR PUBLIC SERVER kafka_server_multi;
+CREATE FOREIGN TABLE kafka_test_part_multi (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    some_int int,
+    some_text text,
+    some_date date,
+    some_time timestamp
+)
+SERVER kafka_server_multi OPTIONS
+    (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
+SELECT * FROM kafka_test_part_multi WHERE part = 0 AND offs > 1000 LIMIT 30;
+ part | offs | some_int |                some_text                 | some_date  |        some_time         
+------+------+----------+------------------------------------------+------------+--------------------------
+    0 | 1001 |    10011 | It's some text, that is for number 10011 | 01-01-2015 | Thu Jan 01 02:46:51 2015
+    0 | 1002 |    10021 | It's some text, that is for number 10021 | 01-01-2015 | Thu Jan 01 02:47:01 2015
+    0 | 1003 |    10031 | It's some text, that is for number 10031 | 01-01-2015 | Thu Jan 01 02:47:11 2015
+    0 | 1004 |    10041 | It's some text, that is for number 10041 | 01-01-2015 | Thu Jan 01 02:47:21 2015
+    0 | 1005 |    10051 | It's some text, that is for number 10051 | 01-01-2015 | Thu Jan 01 02:47:31 2015
+    0 | 1006 |    10061 | It's some text, that is for number 10061 | 01-01-2015 | Thu Jan 01 02:47:41 2015
+    0 | 1007 |    10071 | It's some text, that is for number 10071 | 01-01-2015 | Thu Jan 01 02:47:51 2015
+    0 | 1008 |    10081 | It's some text, that is for number 10081 | 01-01-2015 | Thu Jan 01 02:48:01 2015
+    0 | 1009 |    10091 | It's some text, that is for number 10091 | 01-01-2015 | Thu Jan 01 02:48:11 2015
+    0 | 1010 |    10101 | It's some text, that is for number 10101 | 01-01-2015 | Thu Jan 01 02:48:21 2015
+    0 | 1011 |    10111 | It's some text, that is for number 10111 | 01-01-2015 | Thu Jan 01 02:48:31 2015
+    0 | 1012 |    10121 | It's some text, that is for number 10121 | 01-01-2015 | Thu Jan 01 02:48:41 2015
+    0 | 1013 |    10131 | It's some text, that is for number 10131 | 01-01-2015 | Thu Jan 01 02:48:51 2015
+    0 | 1014 |    10141 | It's some text, that is for number 10141 | 01-01-2015 | Thu Jan 01 02:49:01 2015
+    0 | 1015 |    10151 | It's some text, that is for number 10151 | 01-01-2015 | Thu Jan 01 02:49:11 2015
+    0 | 1016 |    10161 | It's some text, that is for number 10161 | 01-01-2015 | Thu Jan 01 02:49:21 2015
+    0 | 1017 |    10171 | It's some text, that is for number 10171 | 01-01-2015 | Thu Jan 01 02:49:31 2015
+    0 | 1018 |    10181 | It's some text, that is for number 10181 | 01-01-2015 | Thu Jan 01 02:49:41 2015
+    0 | 1019 |    10191 | It's some text, that is for number 10191 | 01-01-2015 | Thu Jan 01 02:49:51 2015
+    0 | 1020 |    10201 | It's some text, that is for number 10201 | 01-01-2015 | Thu Jan 01 02:50:01 2015
+    0 | 1021 |    10211 | It's some text, that is for number 10211 | 01-01-2015 | Thu Jan 01 02:50:11 2015
+    0 | 1022 |    10221 | It's some text, that is for number 10221 | 01-01-2015 | Thu Jan 01 02:50:21 2015
+    0 | 1023 |    10231 | It's some text, that is for number 10231 | 01-01-2015 | Thu Jan 01 02:50:31 2015
+    0 | 1024 |    10241 | It's some text, that is for number 10241 | 01-01-2015 | Thu Jan 01 02:50:41 2015
+    0 | 1025 |    10251 | It's some text, that is for number 10251 | 01-01-2015 | Thu Jan 01 02:50:51 2015
+    0 | 1026 |    10261 | It's some text, that is for number 10261 | 01-01-2015 | Thu Jan 01 02:51:01 2015
+    0 | 1027 |    10271 | It's some text, that is for number 10271 | 01-01-2015 | Thu Jan 01 02:51:11 2015
+    0 | 1028 |    10281 | It's some text, that is for number 10281 | 01-01-2015 | Thu Jan 01 02:51:21 2015
+    0 | 1029 |    10291 | It's some text, that is for number 10291 | 01-01-2015 | Thu Jan 01 02:51:31 2015
+    0 | 1030 |    10301 | It's some text, that is for number 10301 | 01-01-2015 | Thu Jan 01 02:51:41 2015
+(30 rows)
+

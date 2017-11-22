@@ -36,10 +36,9 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
     {
         /* Add brokers */
         /* Check if exactly 1 broker was added */
-        if (rd_kafka_brokers_add(kafka_handle, k_options.brokers) != 1)
+        if (rd_kafka_brokers_add(kafka_handle, k_options.brokers) < 1)
         {
             rd_kafka_destroy(kafka_handle);
-            rd_kafka_conf_destroy(conf);
             elog(ERROR, "No valid brokers specified");
             kafka_handle = NULL;
         }
