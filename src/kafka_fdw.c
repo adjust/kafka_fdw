@@ -1196,7 +1196,7 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
     if (!isnull)
         partition = DatumGetInt32(value);
 
-    DEBUGLOG("CSV ROW: %s", festate->attribute_buf.data);
+    DEBUGLOG("Message: %s", festate->attribute_buf.data);
 
 retry:
 
@@ -1206,15 +1206,11 @@ retry:
                            festate->attribute_buf.data, // Message payload (value) and length
                            festate->attribute_buf.len,
                            NULL, // Optional key and its length
-                           0,
-                           NULL // Message opaque, provided in  delivery report callback as* msg_opaque.
+                           0,    // and its length
+                           NULL  // Message opaque, provided in  delivery report callback as* msg_opaque.
     );
     if (ret != 0)
     {
-        elog(ERROR,
-             "%% Failed to produce to topic %s: %s\n",
-             rd_kafka_topic_name(festate->kafka_topic_handle),
-             rd_kafka_err2str(rd_kafka_last_error()));
 
         /* Poll to handle delivery reports */
         if (rd_kafka_last_error() == RD_KAFKA_RESP_ERR__QUEUE_FULL)
@@ -1232,6 +1228,11 @@ retry:
             rd_kafka_poll(festate->kafka_handle, 1000 /*block for max 1000ms*/);
             goto retry;
         }
+
+        elog(ERROR,
+             "%% Failed to produce to topic %s: %s\n",
+             rd_kafka_topic_name(festate->kafka_topic_handle),
+             rd_kafka_err2str(rd_kafka_last_error()));
     }
 
     rd_kafka_poll(festate->kafka_handle, 0 /*non-blocking*/);
