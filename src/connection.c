@@ -52,6 +52,13 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
               ERROR,
               (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", k_options.topic)));
 
+        if (rd_kafka_topic_conf_set(topic_conf, "auto.offset.reset", "smallest", errstr, KAFKA_MAX_ERR_MSG) !=
+            RD_KAFKA_CONF_OK)
+            ereport(
+              ERROR,
+              (errcode(ERRCODE_FDW_ERROR),
+               errmsg_internal("kafka_fdw: could not set configuration option auto.offset.reset %s", k_options.topic)));
+
         kafka_topic_handle = rd_kafka_topic_new(kafka_handle, k_options.topic, topic_conf);
         topic_conf         = NULL; /* Now owned by kafka_topic_handle */
 
