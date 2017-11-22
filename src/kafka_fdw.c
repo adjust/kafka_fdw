@@ -907,6 +907,8 @@ check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List 
 static void
 kafkaStop(KafkaFdwExecutionState *festate)
 {
+    DEBUGLOG("%s", __func__);
+
     if (rd_kafka_consume_stop(festate->kafka_topic_handle, festate->kafka_options.scan_params.partition) == -1)
     {
         rd_kafka_resp_err_t err = rd_kafka_last_error();

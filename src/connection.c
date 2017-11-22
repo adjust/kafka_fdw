@@ -26,11 +26,24 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
 
     rd_kafka_conf_t *conf;
 
-    conf = rd_kafka_conf_new();
+    conf       = rd_kafka_conf_new();
+    topic_conf = rd_kafka_topic_conf_new();
 
-    kafka_handle       = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
-    kafka_topic_handle = NULL;
-    partition_list     = NIL;
+    /* Setup topic conf */
+    if (rd_kafka_topic_conf_set(topic_conf, "auto.commit.enable", "false", errstr, KAFKA_MAX_ERR_MSG) !=
+        RD_KAFKA_CONF_OK)
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", k_options.topic)));
+
+    if (rd_kafka_topic_conf_set(topic_conf, "auto.offset.reset", "smallest", errstr, KAFKA_MAX_ERR_MSG) !=
+        RD_KAFKA_CONF_OK)
+        ereport(
+          ERROR,
+          (errcode(ERRCODE_FDW_ERROR),
+           errmsg_internal("kafka_fdw: could not set configuration option auto.offset.reset %s", k_options.topic)));
+
+    kafka_handle   = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
+    partition_list = NIL;
 
     if (kafka_handle != NULL)
     {
@@ -44,21 +57,6 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
         }
 
         /* Create topic handle */
-        topic_conf = rd_kafka_topic_conf_new();
-
-        if (rd_kafka_topic_conf_set(topic_conf, "auto.commit.enable", "false", errstr, KAFKA_MAX_ERR_MSG) !=
-            RD_KAFKA_CONF_OK)
-            ereport(
-              ERROR,
-              (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", k_options.topic)));
-
-        if (rd_kafka_topic_conf_set(topic_conf, "auto.offset.reset", "smallest", errstr, KAFKA_MAX_ERR_MSG) !=
-            RD_KAFKA_CONF_OK)
-            ereport(
-              ERROR,
-              (errcode(ERRCODE_FDW_ERROR),
-               errmsg_internal("kafka_fdw: could not set configuration option auto.offset.reset %s", k_options.topic)));
-
         kafka_topic_handle = rd_kafka_topic_new(kafka_handle, k_options.topic, topic_conf);
         topic_conf         = NULL; /* Now owned by kafka_topic_handle */
 
@@ -102,6 +100,7 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
 void
 kafkaCloseConnection(KafkaFdwExecutionState *festate)
 {
+    DEBUGLOG("%s", __func__);
     rd_kafka_topic_destroy(festate->kafka_topic_handle);
     rd_kafka_destroy(festate->kafka_handle);
     festate->kafka_topic_handle = NULL;
