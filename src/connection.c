@@ -35,7 +35,7 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", k_options.topic)));
 
-    if (rd_kafka_topic_conf_set(topic_conf, "auto.offset.reset", "smallest", errstr, KAFKA_MAX_ERR_MSG) !=
+    if (rd_kafka_topic_conf_set(topic_conf, "auto.offset.reset", "beginning", errstr, KAFKA_MAX_ERR_MSG) !=
         RD_KAFKA_CONF_OK)
         ereport(
           ERROR,
@@ -53,8 +53,19 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
         {
             rd_kafka_destroy(kafka_handle);
             elog(ERROR, "No valid brokers specified");
-            kafka_handle = NULL;
         }
+        /*
+                const char **arr;
+                size_t       cnt;
+                arr = rd_kafka_topic_conf_dump(topic_conf, &cnt);
+
+                for (i = 0; i < (int) cnt; i += 2)
+                    DEBUGLOG("%s = %s\n", arr[i], arr[i + 1]);
+
+                DEBUGLOG("\n");
+
+                rd_kafka_conf_dump_free(arr, cnt);
+        */
 
         /* Create topic handle */
         kafka_topic_handle = rd_kafka_topic_new(kafka_handle, k_options.topic, topic_conf);
