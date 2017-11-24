@@ -2,6 +2,7 @@
 : ${PG_PORT:=5432}
 : ${KAFKA_PRODUCER:="/usr/local/bin/kafka-console-producer"}
 : ${KAFKA_TOPICS:="/usr/local/bin/kafka-topics"}
+: ${KAFKA_CONFIG:="/usr/local/bin/kafka-configs"}
 
 
 topics=( contrib_regress4 contrib_regress contrib_regress_prod contrib_regress_prod_json contrib_regress_junk contrib_regress_json contrib_regress_json_junk )
@@ -15,27 +16,22 @@ for t in "${topics[@]}"; do
   ((index++))
 done
 
-topic_part4="contrib_regress4"
-simple_topic="contrib_regress"
-prod_topic="contrib_regress_prod"
-json_prod_topic="contrib_regress_prod_json"
-junk_topic="contrib_regress_junk"
-json_topic="contrib_regress_json"
-json_junk_topic="contrib_regress_json_junk"
-
 out_sql="SELECT i as int_val, 'It''s some text, that is for number '||i as text_val, ('2015-01-01'::date + (i || ' seconds')::interval)::date as date_val, ('2015-01-01'::date + (i || ' seconds')::interval)::timestamp as time_val FROM generate_series(1,1e6::int, 10) i ORDER BY i"
 kafka_cmd="$KAFKA_PRODUCER --broker-list localhost:9092 --topic"
+kafka_config_cmd="$KAFKA_CONFIG --zookeeper localhost:2181 --entity-type topics"
 
 # delete topic if it might exist
+topics+=(contrib_regress_retained)
 for t in "${topics[@]}"; do $KAFKA_TOPICS --zookeeper localhost:2181 --delete --topic ${t} & done; wait
 
 
 # create topics with partitions
 for t in "${toppart[@]}"; do $KAFKA_TOPICS --zookeeper localhost:2181 --create ${t} --replication-factor 1 & done; wait
 
-# write some test data to topicc
-psql -c "COPY(SELECT json_build_object('int_val',int_val, 'text_val',text_val, 'date_val',date_val, 'time_val', time_val ) FROM (${out_sql}) t) TO STDOUT (FORMAT TEXT);" -d postgres -p $PG_PORT -o "| ${kafka_cmd} ${json_topic}" >/dev/null &
+# write some test data to json topicc
+psql -c "COPY(SELECT json_build_object('int_val',int_val, 'text_val',text_val, 'date_val',date_val, 'time_val', time_val ) FROM (${out_sql}) t) TO STDOUT (FORMAT TEXT);" -d postgres -p $PG_PORT -o "| ${kafka_cmd} contrib_regress_json" >/dev/null &
 
+# write some test data to csv topicc
 for t in contrib_regress contrib_regress4; do psql -c "COPY(${out_sql}) TO STDOUT (FORMAT CSV);" -d postgres -p $PG_PORT -o "| ${kafka_cmd} ${t}" >/dev/null & done; wait
 
 
@@ -68,3 +64,25 @@ $kafka_cmd contrib_regress_json_junk <<-EOF
 {"int_val" : 999851, "text_val" : "correct line null time", "date_val" : "2015-01-12", "time_val" : null}
 {"int_val" : 999871, "invalid json no time" : "invalid json", "date_val" : "2015-01-12", "time_val" : }
 EOF
+
+
+$KAFKA_TOPICS --zookeeper localhost:2181 --create --topic contrib_regress_retained --partitions 1 --replication-factor 1 --config retention.ms=10 --config file.delete.delay.ms=10
+
+$kafka_cmd contrib_regress_retained <<-EOF
+1,"correct line",01-01-2015,Thu Jan 01 01:31:00 2015
+2,"correct line",01-01-2015,Thu Jan 01 01:31:00 2015
+3,"correct line",01-01-2015,Thu Jan 01 01:31:00 2015
+EOF
+
+# $kafka_config_cmd --alter --add-config retention.ms=100,file.delete.delay.ms=100 --entity-name contrib_regress_retained
+sleep 3
+$kafka_config_cmd --alter --delete-config retention.ms --entity-name contrib_regress_retained
+
+
+$kafka_cmd contrib_regress_retained <<-EOF
+4,"correct line",01-01-2015,Thu Jan 01 01:31:00 2015
+5,"correct line",01-01-2015,Thu Jan 01 01:31:00 2015
+6,"correct line",01-01-2015,Thu Jan 01 01:31:00 2015
+EOF
+
+kafka-console-consumer --bootstrap-server localhost:9092 --topic contrib_regress_retained --from-beginning --timeout-ms 100

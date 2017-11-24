@@ -26,6 +26,23 @@ static ForeignScan *kafkaGetForeignPlan(PlannerInfo *root,
                                         Plan *outer_plan
 #endif
 );
+
+/*
+ * Indexes of FDW-private information stored in fdw_private lists.
+ *
+ * These items are indexed with the enum FdwScanPrivateIndex, so an item
+ * can be fetched with list_nth().
+ */
+enum FdwScanPrivateIndex
+{
+    FdwScanKafkaOptions,
+    FdwScanParseOptions,
+    FdwScanKafkaHandle,
+    FdwScanKafkaTopicHandle,
+    FdwScanKafkaPartitionList,
+    FdwScanConfSel
+};
+
 static void            kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es);
 static void            kafkaBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *kafkaIterateForeignScan(ForeignScanState *node);
@@ -138,10 +155,17 @@ kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *p
 static void
 estimate_size(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private)
 {
-    double nrows;
+    double    nrows;
+    ListCell *cell;
+    fdw_private->ntuples = 0;
 
-    /* Estimate relation size we can't do better than hard code for now */
-    fdw_private->ntuples = fdw_private->kafka_options.batch_size;
+    foreach (cell, fdw_private->partition_list)
+    {
+        KafkaPartitionMeta *p_meta = (KafkaPartitionMeta *) lfirst(cell);
+        fdw_private->ntuples       = fdw_private->ntuples + (p_meta->high - p_meta->low);
+    }
+
+    /* Estimate total relation size */
 
     /* now idea how to estimate number of pages */
     fdw_private->pages = fdw_private->ntuples / 3;
@@ -199,12 +223,22 @@ kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntablei
 {
 
     KafkaFdwPlanState *fdw_private;
+    char               errstr[KAFKA_MAX_ERR_MSG];
 
     /* Fetch options. */
     fdw_private                = (KafkaFdwPlanState *) palloc0(sizeof(KafkaFdwPlanState));
     fdw_private->kafka_options = (KafkaOptions){ DEFAULT_KAFKA_OPTIONS };
 
     kafkaGetOptions(foreigntableid, &fdw_private->kafka_options, &fdw_private->parse_options);
+    KafkaFdwGetConnection(fdw_private, errstr);
+
+    if (fdw_private->kafka_handle == NULL)
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+                 errmsg_internal("kafka_fdw: Unable to connect to %s", fdw_private->kafka_options.brokers),
+                 errdetail("%s", errstr)));
+    }
 
     baserel->fdw_private = (void *) fdw_private;
 
@@ -250,13 +284,19 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
         kafkaParseExpression(kafka_options, ((RestrictInfo *) lfirst(lc))->clause);
     }
 
+    kafkaPartionProof(kafka_options, conditions, fdw_private->partition_list);
+
     if (kafka_options->scan_params.partition == -1 || kafka_options->scan_params.offset == -1)
     {
         ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("offset and partition must be set in WHERE clause")));
     }
 
     /* we pass the kafka and parse options for scanning */
-    options = list_make2(kafka_options, &fdw_private->parse_options);
+    options = list_make5(kafka_options,
+                         &fdw_private->parse_options,
+                         fdw_private->kafka_handle,
+                         fdw_private->kafka_topic_handle,
+                         fdw_private->partition_list);
 
     /* Decide whether to selectively perform binary conversion */
     if (check_selective_binary_conversion(baserel, foreigntableid, &columns))
@@ -358,11 +398,10 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
     KafkaOptions kafka_options;
     ParseOptions parse_options;
     List *       fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
-    kafka_options            = *(KafkaOptions *) list_nth(fdw_private, 0);
-    parse_options            = *(ParseOptions *) list_nth(fdw_private, 1);
+    kafka_options            = *(KafkaOptions *) list_nth(fdw_private, FdwScanKafkaOptions);
+    parse_options            = *(ParseOptions *) list_nth(fdw_private, FdwScanParseOptions);
 
     /* Fetch options --- we only need topic at this point */
-    // kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, &parse_options);
 
     ExplainPropertyText("Kafka topic", kafka_options.topic, es);
     ExplainPropertyText("scanning", KafkaScanParamsToString(&kafka_options.scan_params), es);
@@ -391,8 +430,8 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     List *                  attnums     = NIL;
     List *                  fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
 
-    kafka_options = *(KafkaOptions *) list_nth(fdw_private, 0);
-    parse_options = *(ParseOptions *) list_nth(fdw_private, 1);
+    kafka_options = *(KafkaOptions *) list_nth(fdw_private, FdwScanKafkaOptions);
+    parse_options = *(ParseOptions *) list_nth(fdw_private, FdwScanParseOptions);
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
@@ -470,11 +509,9 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
      * Init Kafka-related stuff
      */
 
-    /* Open connection if possible */
-    if (festate->kafka_handle == NULL)
-    {
-        KafkaFdwGetConnection(festate, errstr);
-    }
+    festate->kafka_handle       = list_nth(fdw_private, FdwScanKafkaHandle);
+    festate->kafka_topic_handle = list_nth(fdw_private, FdwScanKafkaTopicHandle);
+
     if (festate->kafka_handle == NULL)
     {
         ereport(ERROR,
@@ -488,7 +525,6 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
           ERROR,
           (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", kafka_options.topic)));
 
-    // festate->buffer = palloc(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
     festate->buffer = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
     kafkaStart(festate);

@@ -122,11 +122,22 @@ typedef struct ParseOptions
  */
 typedef struct KafkaFdwPlanState
 {
-    KafkaOptions kafka_options; /* kafka optopns */
-    ParseOptions parse_options; /* merged COPY options */
-    BlockNumber  pages;         /* estimate of topic's physical size */
-    double       ntuples;       /* estimate of number of rows in topic */
+    KafkaOptions      kafka_options;      /* kafka optopns */
+    ParseOptions      parse_options;      /* merged COPY options */
+    rd_kafka_t *      kafka_handle;       /* connection to act on */
+    rd_kafka_topic_t *kafka_topic_handle; /* topic to act on */
+    List *            partition_list;     /* list of KafkaPartitionMeta*/
+
+    BlockNumber pages;   /* estimate of topic's physical size */
+    double      ntuples; /* estimate of number of rows in topic */
 } KafkaFdwPlanState;
+
+typedef struct KafkaPartitionMeta
+{
+    int32 partition;
+    int64 high;
+    int64 low;
+} KafkaPartitionMeta;
 
 /*
  * FDW-specific information for ForeignScanState.fdw_state.
@@ -177,7 +188,7 @@ typedef struct KafkaFdwModifyState
 
 } KafkaFdwModifyState;
 
-void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
+void KafkaFdwGetConnection(KafkaFdwPlanState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
 void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
@@ -186,4 +197,7 @@ bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
 void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot);
 int  KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
 void KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+
+void kafkaPartionProof(KafkaOptions *kafka_options, List *restrictinfo_list, List *partition_list);
+
 #endif

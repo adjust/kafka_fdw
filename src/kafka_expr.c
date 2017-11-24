@@ -1,8 +1,14 @@
 #include "kafka_fdw.h"
 
 #include "catalog/pg_operator.h"
+#include "optimizer/predtest.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+
+static Var *   makeVarNode(int attnum, Oid type);
+static Const * makeConstNode(Oid type, Datum val);
+static OpExpr *makeOpNode(Oid opno, Oid opres, Node *left, Node *right);
+static List *  buildPredList(KafkaPartitionMeta *p, int part_attnum, int offset_attnum);
 
 #define canHandleType(x) ((x) == INT8OID || (x) == INT2OID || (x) == INT4OID)
 
@@ -139,12 +145,14 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
             if (varattno == partition_attnum)
             {
                 int val = DatumGetInt32(((Const *) constatt)->constvalue);
+                /*
                 if (val < 0)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be greater than 0")));
                 if (op != OP_EQ)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set using equal (=)")));
                 if (kafka_options->scan_params.partition > 0 && kafka_options->scan_params.partition != val)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("scanning of multiple partitions not allowed")));
+                    */
                 kafka_options->scan_params.partition = val;
                 break;
             }
@@ -224,4 +232,93 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
         default: return false;
     }
     return true;
+}
+
+// predtest.c
+void
+kafkaPartionProof(KafkaOptions *kafka_options, List *restrictinfo_list, List *partition_list)
+{
+    ListCell *lc;
+    foreach (lc, partition_list)
+    {
+        List *predList;
+
+        KafkaPartitionMeta *p = (KafkaPartitionMeta *) lfirst(lc);
+        predList              = buildPredList(p, kafka_options->partition_attnum, kafka_options->offset_attnum);
+
+        if (predicate_implied_by(predList, restrictinfo_list))
+            elog(INFO, "yeah use part %d", p->partition);
+        else
+            elog(INFO, "nope skip part %d", p->partition);
+    }
+}
+
+static Var *
+makeVarNode(int attnum, Oid type)
+{
+    Var *res         = makeNode(Var);
+    res->varattno    = attnum;
+    res->vartype     = type;
+    res->varcollid   = InvalidOid;
+    res->varlevelsup = 0;
+    res->location    = -1;
+    return res;
+}
+static Const *
+makeConstNode(Oid type, Datum val)
+{
+    Assert(type == INT4OID || type == INT8OID);
+
+    Const *res       = makeNode(Const);
+    res->consttype   = type;
+    res->constcollid = InvalidOid;
+    res->constlen    = type == INT4OID ? 4 : 8;
+    res->constvalue  = val;
+    res->constisnull = false;
+    res->constbyval  = true;
+    res->location    = -1;
+    return res;
+}
+
+static OpExpr *
+makeOpNode(Oid opno, Oid opres, Node *left, Node *right)
+{
+    OpExpr *res       = makeNode(OpExpr);
+    res->opno         = opno;
+    res->opresulttype = opres;
+    res->opretset     = false;
+    res->opcollid     = InvalidOid;
+    res->inputcollid  = InvalidOid;
+    res->args         = list_make2(left, right);
+
+    return res;
+}
+
+static List *
+buildPredList(KafkaPartitionMeta *p, int part_attnum, int offset_attnum)
+{
+
+    elog(INFO, "part: %d, low: %ld high: %ld", p->partition, p->low, p->high);
+    OpExpr *partition_node;
+    OpExpr *high_node;
+    OpExpr *low_node;
+
+    List *result;
+
+    Node *left     = (Node *) makeVarNode(part_attnum, INT4OID);
+    Node *right    = (Node *) makeConstNode(INT4OID, Int32GetDatum(p->partition));
+    partition_node = makeOpNode(Int4EqualOperator, INT4OID, left, right);
+
+    left      = (Node *) makeVarNode(offset_attnum, INT8OID);
+    right     = (Node *) makeConstNode(INT8OID, Int64GetDatum(p->high + 1));
+    high_node = makeOpNode(Int8LessOperator, INT8OID, (Node *) left, (Node *) right);
+
+    /* note we commute due to missing knowledeg of Int8GtEqualOp */
+    left     = (Node *) makeConstNode(INT8OID, Int64GetDatum(p->low));
+    right    = (Node *) makeVarNode(offset_attnum, INT8OID);
+    low_node = makeOpNode(Int8LessOperator, INT8OID, (Node *) left, (Node *) right);
+
+    result = list_make3(partition_node, low_node, high_node);
+
+    return result;
 }

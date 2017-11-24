@@ -16,3 +16,8 @@ kafka-console-consumer --bootstrap-server localhost:9092 --topic contrib_regress
 
 /* purge */
 kafka-topics --zookeeper localhost:2181 --delete --topic contrib_regress
+
+/* retention */
+kafka-configs --zookeeper localhost:2181 --alter --add-config retention.ms=1000 --entity-name contrib_regress --entity-type topics
+
+
