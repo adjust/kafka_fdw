@@ -18,13 +18,12 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
     KafkaOptions           k_options          = festate->kafka_options;
     int                    i;
     rd_kafka_resp_err_t    err;
+    rd_kafka_conf_t *      conf;
 
     /* brokers and topic should be validated just double check */
 
     if (k_options.brokers == NULL || k_options.topic == NULL)
         elog(ERROR, "brokers and topic need to be set ");
-
-    rd_kafka_conf_t *conf;
 
     conf = rd_kafka_conf_new();
 
@@ -34,6 +33,9 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
 
     if (kafka_handle != NULL)
     {
+        const struct rd_kafka_metadata *metadata;
+        const struct rd_kafka_metadata_topic *topic;
+
         /* Add brokers */
         /* Check if exactly 1 broker was added */
         if (rd_kafka_brokers_add(kafka_handle, k_options.brokers) < 1)
@@ -55,10 +57,6 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
         kafka_topic_handle = rd_kafka_topic_new(kafka_handle, k_options.topic, topic_conf);
         topic_conf         = NULL; /* Now owned by kafka_topic_handle */
 
-        /* get metadata i.e. partitions for topic */
-
-        const struct rd_kafka_metadata *metadata;
-
         /* Fetch metadata */
         err = rd_kafka_metadata(kafka_handle, 0, kafka_topic_handle, &metadata, 5000);
 
@@ -68,11 +66,12 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
         if (metadata->topic_cnt != 1)
             elog(ERROR, "%% Surprisingly got %d topics while 1 was expected", metadata->topic_cnt);
 
-        const struct rd_kafka_metadata_topic *t = &metadata->topics[0];
-        for (i = 0; i < t->partition_cnt; i++)
+        /* Get partitions list for topic */
+        topic = &metadata->topics[0];
+        for (i = 0; i < topic->partition_cnt; i++)
         {
             const struct rd_kafka_metadata_partition *p;
-            p              = &t->partitions[i];
+            p              = &topic->partitions[i];
             partition_list = lappend_int(partition_list, p->id);
         }
 

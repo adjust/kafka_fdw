@@ -58,8 +58,6 @@ static void composite_to_json(Datum composite, StringInfo result, bool use_line_
 int
 KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error)
 {
-    DEBUGLOG("%s", __func__);
-
     char  delimc  = festate->parse_options.delim[0];
     char  quotec  = festate->parse_options.quote[0];
     char  escapec = festate->parse_options.escape[0];
@@ -67,6 +65,8 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, 
     char *output_ptr;
     char *cur_ptr;
     char *line_end_ptr;
+
+    DEBUGLOG("%s", __func__);
 
     *unterminated_error = false;
     resetStringInfo(&festate->attribute_buf);
@@ -226,8 +226,6 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, 
 void
 KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot)
 {
-    DEBUGLOG("%s", __func__);
-
     ListCell *lc;
 
     char  delimc         = festate->parse_options.delim[0];
@@ -236,6 +234,8 @@ KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot)
     char *null_print     = festate->parse_options.null_print;
     int   null_print_len = festate->parse_options.null_print_len;
     int   pindex         = 0;
+
+    DEBUGLOG("%s", __func__);
 
     foreach (lc, festate->attnumlist)
     {
@@ -931,8 +931,6 @@ add_json(Datum val, bool is_null, StringInfo result, Oid val_type, bool key_scal
 void
 KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot)
 {
-    DEBUGLOG("%s", __func__);
-
     /* much like json_build_object */
     ListCell *  lc;
     int         pindex   = 0;
@@ -940,14 +938,18 @@ KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot)
     char **     attnames = festate->attnames;
     StringInfo  result   = &festate->attribute_buf;
 
+    DEBUGLOG("%s", __func__);
+
     appendStringInfoCharMacro(result, '{');
     foreach (lc, festate->attnumlist)
     {
-        DEBUGLOG("attname %s", *attnames);
-        DEBUGLOG("typeoid %u", *festate->typioparams);
         bool  isnull;
         int   attnum = lfirst_int(lc);
         Datum value  = slot_getattr(slot, attnum, &isnull);
+
+        DEBUGLOG("attname %s", *attnames);
+        DEBUGLOG("typeoid %u", *festate->typioparams);
+
         if (pindex > 0)
             appendStringInfoString(result, sep);
 

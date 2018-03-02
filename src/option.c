@@ -73,16 +73,17 @@ static void get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_optio
 PG_FUNCTION_INFO_V1(kafka_fdw_validator);
 Datum kafka_fdw_validator(PG_FUNCTION_ARGS)
 {
-    DEBUGLOG("%s", __func__);
-
-    List *    options_list = untransformRelOptions(PG_GETARG_DATUM(0));
-    Oid       catalog      = PG_GETARG_OID(1);
+    List *    options_list;
+    Oid       catalog = PG_GETARG_OID(1);
     ListCell *cell;
+
+    DEBUGLOG("%s", __func__);
 
     /*
      * Check that only options supported by kafka_fdw, and allowed for the
      * current object type, are given.
      */
+    options_list = untransformRelOptions(PG_GETARG_DATUM(0));
     foreach (cell, options_list)
     {
         DefElem *def = (DefElem *) lfirst(cell);
