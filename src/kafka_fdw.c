@@ -375,7 +375,6 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 static void
 kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 {
-    DEBUGLOG("%s", __func__);
     // ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
     KafkaOptions            kafka_options = {};
     ParseOptions            parse_options = {};
@@ -388,9 +387,12 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     Oid *                   typioparams;
     int                     attnum;
     Oid                     in_func_oid;
-    List *                  attnums     = NIL;
-    List *                  fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
+    List *                  attnums = NIL;
+    List *                  fdw_private;
 
+    DEBUGLOG("%s", __func__);
+
+    fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     kafka_options = *(KafkaOptions *) list_nth(fdw_private, 0);
     parse_options = *(ParseOptions *) list_nth(fdw_private, 1);
 
@@ -518,6 +520,8 @@ kafkaIterateForeignScan(ForeignScanState *node)
     bool                    catched_error = false;
     bool                    ignore_junk   = kafka_options->ignore_junk;
     MemoryContext           ccxt          = CurrentMemoryContext;
+    int                     fldct;
+    bool                    error = false;
 
     if (kafka_options->junk_error_attnum != -1)
         resetStringInfo(&festate->junk_buf);
@@ -584,8 +588,6 @@ kafkaIterateForeignScan(ForeignScanState *node)
     values = palloc0(num_attrs * sizeof(Datum));
     nulls  = palloc0(num_attrs * sizeof(bool));
 
-    int  fldct;
-    bool error = false;
     DEBUGLOG("message: %s", message->payload);
 
     if (parse_options->csv_mode)
@@ -688,10 +690,12 @@ kafkaIterateForeignScan(ForeignScanState *node)
             }
             PG_CATCH();
             {
+                MemoryContext ecxt;
+
                 values[m]     = (Datum) 0;
                 nulls[m]      = true;
                 catched_error = true;
-                MemoryContext ecxt;
+
                 ecxt = MemoryContextSwitchTo(ccxt);
 
                 /* accumulate errors if needed */
@@ -758,8 +762,9 @@ kafkaReScanForeignScan(ForeignScanState *node)
 static void
 kafkaEndForeignScan(ForeignScanState *node)
 {
-    DEBUGLOG("%s", __func__);
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
+
+    DEBUGLOG("%s", __func__);
 
     /* if festate is NULL, we are in EXPLAIN; nothing to do */
     if (festate == NULL)
@@ -951,13 +956,14 @@ kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelatio
 {
 
     Relation       rel;
+    TupleDesc      tupdesc;
     int            attnum;
     List *         targetAttrs   = NIL;
     List *         returningList = NIL;
     RangeTblEntry *rte           = planner_rt_fetch(resultRelation, root);
 
-    rel               = heap_open(rte->relid, NoLock);
-    TupleDesc tupdesc = RelationGetDescr(rel);
+    rel     = heap_open(rte->relid, NoLock);
+    tupdesc = RelationGetDescr(rel);
 
     for (attnum = 1; attnum <= tupdesc->natts; attnum++)
     {
@@ -1019,8 +1025,6 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
                         int               subplan_index,
                         int               eflags)
 {
-    DEBUGLOG("%s", __func__);
-
     KafkaFdwModifyState *festate;
     rd_kafka_t *         rk;
     rd_kafka_topic_t *   rkt;
@@ -1033,6 +1037,8 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     ParseOptions         parse_options = {};
     Relation             rel           = rinfo->ri_RelationDesc;
     char                 errstr[512]; /* librdkafka API error reporting buffer */
+
+    DEBUGLOG("%s", __func__);
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
@@ -1171,18 +1177,15 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 static TupleTableSlot *
 kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slot, TupleTableSlot *planSlot)
 {
-    DEBUGLOG("%s", __func__);
     KafkaFdwModifyState *festate = (KafkaFdwModifyState *) rinfo->ri_FdwState;
+    int     partition = RD_KAFKA_PARTITION_UA;
+    int     ret;
+    Datum   value;
+    bool    isnull;
+
+    DEBUGLOG("%s", __func__);
+
     resetStringInfo(&festate->attribute_buf);
-
-    const char **values;
-    int          num_attrs = list_length(festate->attnumlist);
-    values                 = (const char **) palloc(sizeof(char *) * num_attrs);
-    int   partition        = RD_KAFKA_PARTITION_UA;
-    int   ret;
-    Datum value;
-    bool  isnull;
-
     if (slot != NULL && festate->attnumlist != NIL)
     {
         if (festate->parse_options.csv_mode)
