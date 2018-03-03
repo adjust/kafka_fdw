@@ -228,14 +228,12 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     Cost               total_cost;
     List *             columns;
     List *             options = NIL;
-    TupleDesc          tupdesc;
     Relation           relation;
     List *             conditions = baserel->baserestrictinfo;
     ListCell *         lc;
     KafkaOptions *     kafka_options = &fdw_private->kafka_options;
 
     relation = relation_open(foreigntableid, AccessShareLock);
-    tupdesc  = relation->rd_att;
 
     /*
      * write offset and partition to kafka_options.
@@ -356,10 +354,8 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
 
     KafkaOptions kafka_options;
-    ParseOptions parse_options;
     List *       fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     kafka_options            = *(KafkaOptions *) list_nth(fdw_private, 0);
-    parse_options            = *(ParseOptions *) list_nth(fdw_private, 1);
 
     /* Fetch options --- we only need topic at this point */
     // kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, &parse_options);
@@ -690,13 +686,11 @@ kafkaIterateForeignScan(ForeignScanState *node)
             }
             PG_CATCH();
             {
-                MemoryContext ecxt;
-
                 values[m]     = (Datum) 0;
                 nulls[m]      = true;
                 catched_error = true;
 
-                ecxt = MemoryContextSwitchTo(ccxt);
+                MemoryContextSwitchTo(ccxt);
 
                 /* accumulate errors if needed */
                 if (kafka_options->junk_error_attnum != -1)
