@@ -5,11 +5,6 @@
 
 PG_MODULE_MAGIC;
 
-#define OPINT4EQ 96
-#define OPINT84EQ 416
-#define OPINT48EQ 416
-#define OPINT8EQ 410
-
 /*
  * FDW callback routines
  */
@@ -35,14 +30,8 @@ static void            kafkaEndForeignScan(ForeignScanState *node);
 /*
  * Helper functions
  */
-static void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
-static void estimate_size(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private);
+
 static bool check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List **columns);
-static void estimate_costs(PlannerInfo *      root,
-                           RelOptInfo *       baserel,
-                           KafkaFdwPlanState *fdw_private,
-                           Cost *             startup_cost,
-                           Cost *             total_cost);
 static void kafkaStop(KafkaFdwExecutionState *festate);
 static void kafkaStart(KafkaFdwExecutionState *festate);
 
@@ -98,99 +87,6 @@ Datum kafka_fdw_handler(PG_FUNCTION_ARGS)
 }
 
 /*
- * Fetch the options for a kafka_fdw foreign table.
- *
- * We have to separate separete Kafka Options from csv parsing options
- */
-static void
-kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options)
-{
-    ForeignTable *      table;
-    ForeignServer *     server;
-    ForeignDataWrapper *wrapper;
-    List *              options;
-
-    /*
-     * Extract options from FDW objects.  We ignore user mappings because
-     * kafka_fdw doesn't have any options that can be specified there.
-     */
-
-    table   = GetForeignTable(foreigntableid);
-    server  = GetForeignServer(table->serverid);
-    wrapper = GetForeignDataWrapper(server->fdwid);
-
-    options = NIL;
-    options = list_concat(options, wrapper->options);
-    options = list_concat(options, server->options);
-    options = list_concat(options, table->options);
-
-    KafkaProcessParseOptions(parse_options, options);
-    KafkaProcessKafkaOptions(foreigntableid, kafka_options, options);
-}
-
-/*
- * Estimate size of a foreign table.
- *
- * The main result is returned in baserel->rows.  We also set
- * fdw_private->pages and fdw_private->ntuples for later use in the cost
- * calculation.
- */
-static void
-estimate_size(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private)
-{
-    double nrows;
-
-    /* Estimate relation size we can't do better than hard code for now */
-    fdw_private->ntuples = fdw_private->kafka_options.batch_size;
-
-    /* now idea how to estimate number of pages */
-    fdw_private->pages = fdw_private->ntuples / 3;
-
-    /*
-     * Now estimate the number of rows returned by the scan after applying the
-     * baserestrictinfo quals.
-     */
-    nrows = fdw_private->ntuples * clauselist_selectivity(root, baserel->baserestrictinfo, 0, JOIN_INNER, NULL);
-
-    nrows = clamp_row_est(nrows);
-
-    /* Save the output-rows estimate for the planner */
-    baserel->rows = nrows;
-    baserel->rows = fdw_private->ntuples;
-}
-
-/*
- * Estimate costs of scanning a foreign table.
- *
- * Results are returned in *startup_cost and *total_cost.
- */
-static void
-estimate_costs(PlannerInfo *      root,
-               RelOptInfo *       baserel,
-               KafkaFdwPlanState *fdw_private,
-               Cost *             startup_cost,
-               Cost *             total_cost)
-{
-    BlockNumber pages    = fdw_private->pages;
-    double      ntuples  = fdw_private->ntuples;
-    Cost        run_cost = 0;
-    Cost        cpu_per_tuple;
-
-    /*
-     * We estimate costs almost the same way as cost_seqscan(), thus assuming
-     * that I/O costs are equivalent to a regular table file of the same size.
-     * However, we take per-tuple CPU costs as 10x of a seqscan, to account
-     * for the cost of parsing records.
-     */
-    run_cost += seq_page_cost * pages;
-
-    *startup_cost = baserel->baserestrictcost.startup;
-    cpu_per_tuple = cpu_tuple_cost * 10 + baserel->baserestrictcost.per_tuple;
-    run_cost += cpu_per_tuple * ntuples;
-    *total_cost = *startup_cost + run_cost;
-}
-
-/*
  * kafkaGetForeignRelSize
  *      Obtain relation size estimates for a foreign table
  */
@@ -209,7 +105,7 @@ kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntablei
     baserel->fdw_private = (void *) fdw_private;
 
     /* Estimate relation size */
-    estimate_size(root, baserel, fdw_private);
+    KafkaEstimateSize(root, baserel, fdw_private);
 }
 
 /*
@@ -265,7 +161,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 #endif
 
     /* Estimate costs */
-    estimate_costs(root, baserel, fdw_private, &startup_cost, &total_cost);
+    KafkaEstimateCosts(root, baserel, fdw_private, &startup_cost, &total_cost);
 
     relation_close(relation, AccessShareLock);
     /*
@@ -317,7 +213,6 @@ kafkaGetForeignPlan(PlannerInfo *root,
      * handled elsewhere).
      */
     scan_clauses = extract_actual_clauses(scan_clauses, false);
-    // scan_clauses = extract_kafka_conditions(scan_clauses, plan_state->kafka_options);
 
     /* Create the ForeignScan node */
     return make_foreignscan(tlist,
@@ -388,7 +283,7 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 
     DEBUGLOG("%s", __func__);
 
-    fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
+    fdw_private   = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     kafka_options = *(KafkaOptions *) list_nth(fdw_private, 0);
     parse_options = *(ParseOptions *) list_nth(fdw_private, 1);
 
@@ -420,13 +315,13 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 
     /* allocate enough space for fields */
     festate->max_fields = num_phys_attrs;
-    festate->raw_fields = palloc0(festate->max_fields * sizeof(char *));
+    festate->raw_fields = palloc0(num_phys_attrs * sizeof(char *));
 
     /* if we use json we need attnames */
-    if (parse_options.json_mode)
+    if (parse_options.format == JSON)
     {
         initStringInfo(&festate->attname_buf);
-        festate->attnames = palloc0(festate->max_fields * sizeof(char *));
+        festate->attnames = palloc0(num_phys_attrs * sizeof(char *));
     }
 
     /*
@@ -447,13 +342,10 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
         attnums = lappend_int(attnums, attnum);
 
         /* Fetch the input function and typioparam info */
-        if (festate->parse_options.binary)
-            getTypeBinaryInputInfo(attr[attnum - 1]->atttypid, &in_func_oid, &typioparams[attnum - 1]);
-        else
-            getTypeInputInfo(attr[attnum - 1]->atttypid, &in_func_oid, &typioparams[attnum - 1]);
+        getTypeInputInfo(attr[attnum - 1]->atttypid, &in_func_oid, &typioparams[attnum - 1]);
         fmgr_info(in_func_oid, &in_functions[attnum - 1]);
 
-        if (parse_options.json_mode)
+        if (parse_options.format == JSON)
             festate->attnames[attnum - 1] = getJsonAttname(attr[attnum - 1], &festate->attname_buf);
     }
 
@@ -486,7 +378,6 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
           ERROR,
           (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", kafka_options.topic)));
 
-    // festate->buffer = palloc(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
     festate->buffer = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
     kafkaStart(festate);
@@ -586,15 +477,10 @@ kafkaIterateForeignScan(ForeignScanState *node)
 
     DEBUGLOG("message: %s", message->payload);
 
-    if (parse_options->csv_mode)
-        fldct = KafkaReadAttributesCSV(message->payload, message->len, festate, &error);
-    else if (parse_options->json_mode)
-    {
-        fldct = KafkaReadAttributesJson(message->payload, message->len, festate, &error);
-    }
+    fldct = KafkaReadAttributes(message->payload, message->len, festate, parse_options->format, &error);
 
     /* unterminated quote, total junk */
-    if (error && parse_options->csv_mode)
+    if (error && parse_options->format == CSV)
     {
         if (kafka_options->strict)
             ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
@@ -606,7 +492,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
             MemSet(nulls, true, num_attrs);
         }
     }
-    else if (error && parse_options->json_mode)
+    else if (error && parse_options->format == JSON)
     {
         catched_error = true;
         MemSet(nulls, true, num_attrs);
@@ -1054,7 +940,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     festate->out_functions = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * n_params);
 
     /* if we use json we need attnames and oids */
-    if (parse_options.json_mode)
+    if (parse_options.format == JSON)
     {
         initStringInfo(&festate->attname_buf);
         festate->attnames    = palloc0(sizeof(char *) * n_params);
@@ -1081,7 +967,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
             getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
             fmgr_info(typefnoid, &festate->out_functions[num]);
 
-            if (parse_options.json_mode)
+            if (parse_options.format == JSON)
             {
                 festate->attnames[num]    = getJsonAttname(attr, &festate->attname_buf);
                 festate->typioparams[num] = attr->atttypid;
@@ -1171,21 +1057,18 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 static TupleTableSlot *
 kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slot, TupleTableSlot *planSlot)
 {
-    KafkaFdwModifyState *festate = (KafkaFdwModifyState *) rinfo->ri_FdwState;
-    int     partition = RD_KAFKA_PARTITION_UA;
-    int     ret;
-    Datum   value;
-    bool    isnull;
+    KafkaFdwModifyState *festate   = (KafkaFdwModifyState *) rinfo->ri_FdwState;
+    int                  partition = RD_KAFKA_PARTITION_UA;
+    int                  ret;
+    Datum                value;
+    bool                 isnull;
 
     DEBUGLOG("%s", __func__);
 
     resetStringInfo(&festate->attribute_buf);
     if (slot != NULL && festate->attnumlist != NIL)
     {
-        if (festate->parse_options.csv_mode)
-            KafkaWriteAttributesCSV(festate, slot);
-        else if (festate->parse_options.json_mode)
-            KafkaWriteAttributesJson(festate, slot);
+        KafkaWriteAttributes(festate, slot, festate->parse_options.format);
     }
 
     /* fetch partition if given */

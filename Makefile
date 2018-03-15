@@ -34,6 +34,9 @@ SHLIB_LINK += -lrdkafka -lz -lpthread -lrt
 PG_LIBS += -lrdkafka -lz -lpthread -lrt
 endif
 
+ifdef TEST
+REGRESS = $(TEST)
+endif
 
 all: $(EXTENSION)--$(EXTVERSION).sql
 

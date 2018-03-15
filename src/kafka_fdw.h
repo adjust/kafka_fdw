@@ -50,6 +50,13 @@
     (_attn != _kop.junk_attnum && _attn != _kop.junk_error_attnum && _attn != _kop.partition_attnum &&                 \
      _attn != _kop.offset_attnum)
 
+enum kafka_msg_format
+{
+    INVALID = -1,
+    JSON,
+    CSV
+};
+
 enum kafka_op
 {
     OP_INVALID = -1,
@@ -87,34 +94,13 @@ typedef struct KafkaOptions
 
 typedef struct ParseOptions
 {
-    char *format;
-    char  delimiter;
-    char *null;
-    char *encoding;
-    bool *force_not_null;
-    int   file_encoding;        /* file or remote side's character encoding */
-    bool  need_transcoding;     /* file encoding diff from server? */
-    bool  csv_mode;             /* Comma Separated Value format? */
-    bool  json_mode;            /* json Value format? */
-    bool  binary;               /* Binary format? */
-    bool  header_line;          /* CSV header line? */
-    char *null_print;           /* NULL marker string (server encoding!) */
-    int   null_print_len;       /* length of same */
-    char *null_print_client;    /* same converted to file encoding */
-    char *delim;                /* column delimiter (must be 1 byte) */
-    char *quote;                /* CSV quote char (must be 1 byte) */
-    char *escape;               /* CSV escape char (must be 1 byte) */
-    List *force_quote;          /* list of column names */
-    bool  force_quote_all;      /* FORCE_QUOTE *? */
-    bool *force_quote_flags;    /* per-column CSV FQ flags */
-    List *force_notnull;        /* list of column names */
-    bool *force_notnull_flags;  /* per-column CSV FNN flags */
-    List *force_null;           /* list of column names */
-    bool *force_null_flags;     /* per-column CSV FN flags */
-    bool  convert_selectively;  /* do selective binary conversion? */
-    List *convert_select;       /* list of column names (can be NIL) */
-    bool *convert_select_flags; /* per-column CSV/TEXT CS flags */
-
+    enum kafka_msg_format format;
+    char                  delimiter;
+    char *                null_print;     /* NULL marker string (server encoding!) */
+    int                   null_print_len; /* length of same */
+    char *                delim;          /* column delimiter (must be 1 byte) */
+    char *                quote;          /* CSV quote char (must be 1 byte) */
+    char *                escape;         /* CSV escape char (must be 1 byte) */
 } ParseOptions;
 
 /*
@@ -176,14 +162,30 @@ typedef struct KafkaFdwModifyState
     char **              attnames;           /* pointer into attname_buf */
 
 } KafkaFdwModifyState;
-
+/* connection.c */
 void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
-void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
-void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
-int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
+
+/* option.c */
+void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
+
+/* kafka_expr.c */
 bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
-void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot);
-int  KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
-void KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+
+/* parser.c */
+int  KafkaReadAttributes(char *                  msg,
+                         int                     msg_len,
+                         KafkaFdwExecutionState *festate,
+                         enum kafka_msg_format   format,
+                         bool *                  unterminated_error);
+void KafkaWriteAttributes(KafkaFdwModifyState *festate, TupleTableSlot *slot, enum kafka_msg_format format);
+
+/* planning.c */
+void KafkaEstimateSize(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private);
+void KafkaEstimateCosts(PlannerInfo *      root,
+                        RelOptInfo *       baserel,
+                        KafkaFdwPlanState *fdw_private,
+                        Cost *             startup_cost,
+                        Cost *             total_cost);
+
 #endif
