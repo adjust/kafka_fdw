@@ -8,7 +8,6 @@ struct KafkaFdwOption
 {
     const char *optname;
     Oid         optcontext; /* Oid of catalog in which option may appear */
-    bool        librdkafka; /* true if used in librdkafka */
 };
 
 /*
@@ -23,36 +22,36 @@ struct KafkaFdwOption
 static const struct KafkaFdwOption valid_options[] = {
 
     /* Connection options */
-    { "brokers", ForeignServerRelationId, true },
+    { "brokers", ForeignServerRelationId },
 
     /* table options */
-    { "topic", ForeignTableRelationId, true },
-    { "batch_size", ForeignTableRelationId, true },
-    { "buffer_delay", ForeignTableRelationId, true },
-    { "strict", ForeignTableRelationId, true },
-    { "ignore_junk", ForeignTableRelationId, true },
+    { "topic", ForeignTableRelationId },
+    { "batch_size", ForeignTableRelationId },
+    { "buffer_delay", ForeignTableRelationId },
+    { "strict", ForeignTableRelationId },
+    { "ignore_junk", ForeignTableRelationId },
 
     /* Format options */
     /* oids option is not supported */
-    { "format", ForeignTableRelationId, false },
-    { "delimiter", ForeignTableRelationId, false },
-    { "quote", ForeignTableRelationId, false },
-    { "escape", ForeignTableRelationId, false },
-    { "null", ForeignTableRelationId, false },
-    { "encoding", ForeignTableRelationId, false },
-    { "force_not_null", AttributeRelationId, false },
-    { "force_null", AttributeRelationId, false },
-    { "offset", AttributeRelationId, false },
-    { "partition", AttributeRelationId, false },
-    { "junk", AttributeRelationId, false },
-    { "junk_error", AttributeRelationId, false },
-    { "json", AttributeRelationId, false },
+    { "format", ForeignTableRelationId },
+    { "delimiter", ForeignTableRelationId },
+    { "quote", ForeignTableRelationId },
+    { "escape", ForeignTableRelationId },
+    { "null", ForeignTableRelationId },
+    { "encoding", ForeignTableRelationId },
+    { "force_not_null", AttributeRelationId },
+    { "force_null", AttributeRelationId },
+    { "offset", AttributeRelationId },
+    { "partition", AttributeRelationId },
+    { "junk", AttributeRelationId },
+    { "junk_error", AttributeRelationId },
+    { "json", AttributeRelationId },
     /*
      * force_quote is not supported by kafka_fdw because it's for COPY TO for now.
      */
 
     /* Sentinel */
-    { NULL, InvalidOid, false }
+    { NULL, InvalidOid }
 };
 
 /*
@@ -60,8 +59,9 @@ static const struct KafkaFdwOption valid_options[] = {
  */
 
 static bool is_valid_option(const char *keyword, Oid context);
-
 static void get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options);
+static void KafkaProcessParseOptions(ParseOptions *parse_options, List *options);
+static void KafkaProcessKafkaOptions(Oid foreigntableid, KafkaOptions *kafka_options, List *options);
 
 /*
  * Validate the generic options given to a FOREIGN DATA WRAPPER, SERVER,
@@ -129,6 +129,37 @@ Datum kafka_fdw_validator(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Fetch the options for a kafka_fdw foreign table.
+ *
+ * We have to separate separete Kafka Options from parsing options
+ */
+void
+kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options)
+{
+    ForeignTable *      table;
+    ForeignServer *     server;
+    ForeignDataWrapper *wrapper;
+    List *              options;
+
+    /*
+     * Extract options from FDW objects.  We ignore user mappings because
+     * kafka_fdw doesn't have any options that can be specified there.
+     */
+
+    table   = GetForeignTable(foreigntableid);
+    server  = GetForeignServer(table->serverid);
+    wrapper = GetForeignDataWrapper(server->fdwid);
+
+    options = NIL;
+    options = list_concat(options, wrapper->options);
+    options = list_concat(options, server->options);
+    options = list_concat(options, table->options);
+
+    KafkaProcessParseOptions(parse_options, options);
+    KafkaProcessKafkaOptions(foreigntableid, kafka_options, options);
+}
+
+/*
  * Process the statement option list for Parsing.
  *
  * Scan the options list (a list of DefElem) and transpose the information
@@ -138,16 +169,15 @@ Datum kafka_fdw_validator(PG_FUNCTION_ARGS)
  * QUOTE actually exist, has to be applied later.  This just checks for
  * self-consistency of the options list.
  */
-void
+static void
 KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
 {
     ListCell *option;
+    bool      csv = false;
 
     /* Support external use for option sanity checking */
     if (parse_options == NULL)
         parse_options = &(ParseOptions){};
-
-    parse_options->file_encoding = -1;
 
     /* Extract options from the statement node tree */
     foreach (option, options)
@@ -157,15 +187,13 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
         if (strcmp(defel->defname, "format") == 0)
         {
             char *fmt = defGetString(defel);
-
-            if (strcmp(fmt, "text") == 0)
-                /* default format */;
-            else if (strcmp(fmt, "csv") == 0)
-                parse_options->csv_mode = true;
+            if (strcmp(fmt, "csv") == 0)
+            {
+                parse_options->format = CSV;
+                csv                   = true;
+            }
             else if (strcmp(fmt, "json") == 0)
-                parse_options->json_mode = true;
-            else if (strcmp(fmt, "binary") == 0)
-                parse_options->binary = true;
+                parse_options->format = JSON;
             else
                 ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("format \"%s\" not recognized", fmt)));
         }
@@ -193,55 +221,22 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
                 ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options")));
             parse_options->escape = defGetString(defel);
         }
-        else if (strcmp(defel->defname, "force_not_null") == 0)
-        {
-            if (parse_options->force_notnull)
-                ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options")));
-            if (defel->arg && IsA(defel->arg, List))
-                parse_options->force_notnull = (List *) defel->arg;
-            else
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("argument to option \"%s\" must be a list of column names", defel->defname)));
-        }
-        else if (strcmp(defel->defname, "force_null") == 0)
-        {
-            if (parse_options->force_null)
-                ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options")));
-            if (defel->arg && IsA(defel->arg, List))
-                parse_options->force_null = (List *) defel->arg;
-            else
-                ereport(ERROR,
-                        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                         errmsg("argument to option \"%s\" must be a list of column names", defel->defname)));
-        }
-        else if (strcmp(defel->defname, "encoding") == 0)
-        {
-            if (parse_options->file_encoding >= 0)
-                ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options")));
-            parse_options->file_encoding = pg_char_to_encoding(defGetString(defel));
-        }
     }
 
     /*
      * Check for incompatible options (must do these two before inserting
      * defaults)
      */
-    if (parse_options->binary && parse_options->delim)
-        ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("cannot specify DELIMITER in BINARY mode")));
-
-    if (parse_options->binary && parse_options->null_print)
-        ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("cannot specify NULL in BINARY mode")));
 
     /* Set defaults for omitted options */
     if (!parse_options->delim)
-        parse_options->delim = parse_options->csv_mode ? "," : "\t";
+        parse_options->delim = csv ? "," : "\t";
 
     if (!parse_options->null_print)
-        parse_options->null_print = parse_options->csv_mode ? "" : "\\N";
+        parse_options->null_print = csv ? "" : "\\N";
     parse_options->null_print_len = strlen(parse_options->null_print);
 
-    if (parse_options->csv_mode)
+    if (csv)
     {
         if (!parse_options->quote)
             parse_options->quote = "\"";
@@ -276,41 +271,31 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
      * future-proofing.  Likewise we disallow all digits though only octal
      * digits are actually dangerous.
      */
-    if (!parse_options->csv_mode && strchr("\\.abcdefghijklmnopqrstuvwxyz0123456789", parse_options->delim[0]) != NULL)
+    if (!csv && strchr("\\.abcdefghijklmnopqrstuvwxyz0123456789", parse_options->delim[0]) != NULL)
         ereport(ERROR,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                  errmsg("KafkaFdw delimiter cannot be \"%s\"", parse_options->delim)));
 
     /* Check quote */
-    if (!parse_options->csv_mode && parse_options->quote != NULL)
+    if (!csv && parse_options->quote != NULL)
         ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("KafkaFdw quote available only in CSV mode")));
 
-    if (parse_options->csv_mode && strlen(parse_options->quote) != 1)
+    if (csv && strlen(parse_options->quote) != 1)
         ereport(ERROR,
                 (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("KafkaFdw quote must be a single one-byte character")));
 
-    if (parse_options->csv_mode && parse_options->delim[0] == parse_options->quote[0])
+    if (csv && parse_options->delim[0] == parse_options->quote[0])
         ereport(ERROR,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("KafkaFdw delimiter and quote must be different")));
 
     /* Check escape */
-    if (!parse_options->csv_mode && parse_options->escape != NULL)
+    if (!csv && parse_options->escape != NULL)
         ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("KafkaFdw escape available only in CSV mode")));
 
-    if (parse_options->csv_mode && strlen(parse_options->escape) != 1)
+    if (csv && strlen(parse_options->escape) != 1)
         ereport(
           ERROR,
           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("KafkaFdw escape must be a single one-byte character")));
-
-    /* Check force_notnull */
-    if (!parse_options->csv_mode && parse_options->force_notnull != NIL)
-        ereport(ERROR,
-                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("KafkaFdw force not null available only in CSV mode")));
-
-    /* Check force_null */
-    if (!parse_options->csv_mode && parse_options->force_null != NIL)
-        ereport(ERROR,
-                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED), errmsg("KafkaFdw force null available only in CSV mode")));
 
     /* Don't allow the delimiter to appear in the null string. */
     if (strchr(parse_options->null_print, parse_options->delim[0]) != NULL)
@@ -319,7 +304,7 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
                  errmsg("KafkaFdw delimiter must not appear in the NULL specification")));
 
     /* Don't allow the CSV quote char to appear in the null string. */
-    if (parse_options->csv_mode && strchr(parse_options->null_print, parse_options->quote[0]) != NULL)
+    if (csv && strchr(parse_options->null_print, parse_options->quote[0]) != NULL)
         ereport(ERROR,
                 (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                  errmsg("CSV quote character must not appear in the NULL specification")));
@@ -345,7 +330,7 @@ is_valid_option(const char *option, Oid context)
 /*
  * Separate out brokers, topic and column-specific options, since
  */
-void
+static void
 KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
 {
 
@@ -404,7 +389,12 @@ KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
     }
 
     if (relid != InvalidOid)
+    {
         get_kafka_fdw_attribute_options(relid, kafka_options);
+
+        if (kafka_options->topic == NULL)
+            ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR), errmsg("missing option \"topic\"")));
+    }
 
     kafka_options->ignore_junk =
       kafka_options->ignore_junk || kafka_options->junk_attnum != -1 || kafka_options->junk_error_attnum != -1;
@@ -487,12 +477,5 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
     if (kafka_options->junk_error_attnum != -1)
         kafka_options->num_parse_col--;
 
-    /*
-        if (kafka_options->partition_attnum == -1)
-            ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("no partition column set")));
-
-        if (kafka_options->offset_attnum == -1)
-            ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("no offset column set")));
-    */
     heap_close(rel, AccessShareLock);
 }

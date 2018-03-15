@@ -17,25 +17,25 @@ CREATE FOREIGN TABLE kafka_err_test (
     some_date date,
     some_time timestamp
 )
-SERVER kafka_server2 OPTIONS 
-    (format 'foo', batch_size '30', buffer_delay '100');
+SERVER kafka_server2 OPTIONS
+    (format 'foo', batch_size '30', buffer_delay '100', topic 'foo');
 ROLLBACK;
 
 
-
-
-/*
--- no partition and offset colum should error out
+-- redundant format should error out
 BEGIN;
 CREATE FOREIGN TABLE kafka_err_test (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
     some_int int,
     some_text text,
     some_date date,
     some_time timestamp
 )
-SERVER kafka_server2 OPTIONS 
-    (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
+SERVER kafka_server2 OPTIONS
+    (format 'csv', topic 'foo', batch_size '30', buffer_delay '100', format 'json');
 ROLLBACK;
+
 -- no topic should error out
 BEGIN;
 CREATE FOREIGN TABLE kafka_err_test (
@@ -46,7 +46,6 @@ CREATE FOREIGN TABLE kafka_err_test (
     some_date date,
     some_time timestamp
 )
-SERVER kafka_server2 OPTIONS 
+SERVER kafka_server2 OPTIONS
     (format 'csv', batch_size '30', buffer_delay '100');
 ROLLBACK;
-*/

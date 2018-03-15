@@ -7,7 +7,7 @@
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
-/* parse jason */
+/* parse json */
 static HTAB *get_json_as_hash(char *json, int len, const char *funcname);
 static void  hash_object_field_start(void *state, char *fname, bool isnull);
 static void  hash_object_field_end(void *state, char *fname, bool isnull);
@@ -16,18 +16,19 @@ static void  hash_scalar(void *state, char *token, JsonTokenType tokentype);
 
 /* encode json */
 
-typedef enum        /* type categories for datum_to_json */
-{ JSONTYPE_NULL,    /* null, so we didn't bother to identify */
-  JSONTYPE_BOOL,    /* boolean (built-in types only) */
-  JSONTYPE_NUMERIC, /* numeric (ditto) */
-  JSONTYPE_DATE,    /* we use special formatting for datetimes */
-  JSONTYPE_TIMESTAMP,
-  JSONTYPE_TIMESTAMPTZ,
-  JSONTYPE_JSON,      /* JSON itself (and JSONB) */
-  JSONTYPE_ARRAY,     /* array */
-  JSONTYPE_COMPOSITE, /* composite */
-  JSONTYPE_CAST,      /* something with an explicit cast to JSON */
-  JSONTYPE_OTHER      /* all else */
+typedef enum /* type categories for datum_to_json */
+{
+    JSONTYPE_NULL,    /* null, so we didn't bother to identify */
+    JSONTYPE_BOOL,    /* boolean (built-in types only) */
+    JSONTYPE_NUMERIC, /* numeric (ditto) */
+    JSONTYPE_DATE,    /* we use special formatting for datetimes */
+    JSONTYPE_TIMESTAMP,
+    JSONTYPE_TIMESTAMPTZ,
+    JSONTYPE_JSON,      /* JSON itself (and JSONB) */
+    JSONTYPE_ARRAY,     /* array */
+    JSONTYPE_COMPOSITE, /* composite */
+    JSONTYPE_CAST,      /* something with an explicit cast to JSON */
+    JSONTYPE_OTHER      /* all else */
 } JsonTypeCategory;
 
 static void json_categorize_type(Oid typoid, JsonTypeCategory *tcategory, Oid *outfuncoid);
@@ -51,11 +52,44 @@ static void datum_to_json(Datum            val,
                           bool             key_scalar);
 static void add_json(Datum val, bool is_null, StringInfo result, Oid val_type, bool key_scalar);
 static void composite_to_json(Datum composite, StringInfo result, bool use_line_feeds);
+static int  KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
+static int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
+static void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+static void KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+
 /*
  * Parse the char into separate attributes (fields)
  * Returns number of fields or -1 in case of unterminated quoted string
  */
 int
+KafkaReadAttributes(char *                  msg,
+                    int                     msg_len,
+                    KafkaFdwExecutionState *festate,
+                    enum kafka_msg_format   format,
+                    bool *                  unterminated_error)
+{
+    if (format == CSV)
+        return KafkaReadAttributesCSV(msg, msg_len, festate, unterminated_error);
+    else if (format == JSON)
+        return KafkaReadAttributesJson(msg, msg_len, festate, unterminated_error);
+
+    return -1;
+}
+
+void
+KafkaWriteAttributes(KafkaFdwModifyState *festate, TupleTableSlot *slot, enum kafka_msg_format format)
+{
+    if (format == CSV)
+        KafkaWriteAttributesCSV(festate, slot);
+    else if (format == JSON)
+        KafkaWriteAttributesJson(festate, slot);
+}
+
+/*
+ * Parse the char into separate attributes (fields)
+ * Returns number of fields or -1 in case of unterminated quoted string
+ */
+static int
 KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error)
 {
     char  delimc  = festate->parse_options.delim[0];
@@ -223,7 +257,7 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, 
  *  Write a row of csv to festate->attribute_buf
  */
 
-void
+static void
 KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot)
 {
     ListCell *lc;
@@ -448,7 +482,7 @@ hash_scalar(void *state, char *token, JsonTokenType tokentype)
         _state->saved_scalar = token;
 }
 
-int
+static int
 KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *error)
 {
     ListCell *    cur;
@@ -928,7 +962,7 @@ add_json(Datum val, bool is_null, StringInfo result, Oid val_type, bool key_scal
     datum_to_json(val, is_null, result, tcategory, outfuncoid, key_scalar);
 }
 
-void
+static void
 KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot)
 {
     /* much like json_build_object */
