@@ -4,7 +4,10 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
-#define canHandleType(x) ((x) == INT8OID || (x) == INT2OID || (x) == INT4OID)
+#define canHandleType(x) ((x) == INT8OID || (x) == INT4OID || (x) == INT2OID)
+
+#define DatumGetIntArg(x, oid)                                                                                         \
+    (oid == INT8OID ? DatumGetInt64(x) : oid == INT4OID ? DatumGetInt32(x) : DatumGetInt16(x))
 
 static int
 opername_to_op(const char *op)
@@ -104,9 +107,9 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
             */
 
             if (IsA(left, Const))
-                constatt = left; /* the column */
+                constatt = left; /* the constant */
             else if (IsA(right, Const))
-                constatt = right; /* the column */
+                constatt = right; /* the constant */
             else
                 ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("one side of operation must be a constant")));
 
@@ -118,6 +121,7 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
                 op_oid = oper->opno;
 
             tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(op_oid));
+
             if (!HeapTupleIsValid(tuple))
                 elog(ERROR, "cache lookup failed for operator %u", op_oid);
             form         = (Form_pg_operator) GETSTRUCT(tuple);
@@ -138,9 +142,12 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
 
             if (varattno == partition_attnum)
             {
-                int val = DatumGetInt32(((Const *) constatt)->constvalue);
+
+                int64 val = DatumGetIntArg(((Const *) constatt)->constvalue, rightargtype);
                 if (val < 0)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be greater than 0")));
+                if (val >= INT32_MAX)
+                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition number out of range")));
                 if (op != OP_EQ)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set using equal (=)")));
                 if (kafka_options->scan_params.partition > 0 && kafka_options->scan_params.partition != val)
@@ -150,10 +157,7 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
             }
             if (varattno == offset_attnum)
             {
-                int val = DatumGetInt64(((Const *) constatt)->constvalue);
-
-                if (val < 0)
-                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("offset must be greater than 0")));
+                int64 val = DatumGetIntArg(((Const *) constatt)->constvalue, rightargtype);
 
                 // the first offset we found
                 if (kafka_options->scan_params.offset_op == OP_INVALID)
