@@ -45,7 +45,7 @@ ERROR:  scanning of multiple partitions not allowed
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,2)) ;
 ERROR:  scanning of multiple offsets not allowed
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
-ERROR:  offset and partition must be set in WHERE clause
+ERROR:  partition must be set in WHERE clause
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
               QUERY PLAN               
 ---------------------------------------
