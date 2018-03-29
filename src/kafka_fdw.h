@@ -30,6 +30,8 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+#define WARTERMARK_TIMEOUT 1000 /* timeout to query watermark */
+
 #ifdef DO_DEBUG
 #define DEBUGLOG(...) elog(DEBUG1, __VA_ARGS__)
 #else

@@ -5,6 +5,8 @@
 
 PG_MODULE_MAGIC;
 
+#define MAX(_a, _b) ((_a > _b) ? _a : _b)
+
 /*
  * FDW callback routines
  */
@@ -144,9 +146,9 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
         kafkaParseExpression(kafka_options, ((RestrictInfo *) lfirst(lc))->clause);
     }
 
-    if (kafka_options->scan_params.partition == -1 || kafka_options->scan_params.offset == -1)
+    if (kafka_options->scan_params.partition == -1)
     {
-        ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("offset and partition must be set in WHERE clause")));
+        ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set in WHERE clause")));
     }
 
     /* we pass the kafka and parse options for scanning */
@@ -803,6 +805,9 @@ kafkaStop(KafkaFdwExecutionState *festate)
 static void
 kafkaStart(KafkaFdwExecutionState *festate)
 {
+    rd_kafka_resp_err_t err;
+    int64_t             low, high = 0;
+
     DEBUGLOG("%s part: %d, offs: %ld, topic: %s",
              __func__,
              festate->kafka_options.scan_params.partition,
@@ -811,12 +816,25 @@ kafkaStart(KafkaFdwExecutionState *festate)
 
     festate->buffer_count  = 0;
     festate->buffer_cursor = 0;
+
+    err = rd_kafka_query_watermark_offsets(festate->kafka_handle,
+                                           festate->kafka_options.topic,
+                                           festate->kafka_options.scan_params.partition,
+                                           &low,
+                                           &high,
+                                           WARTERMARK_TIMEOUT);
+
+    if (err != RD_KAFKA_RESP_ERR_NO_ERROR && err != RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION)
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_ERROR),
+                 errmsg_internal("kafka_fdw: Failed to get watermarks %s", rd_kafka_err2str(err))));
+
     /* Start consuming */
     if (rd_kafka_consume_start(festate->kafka_topic_handle,
                                festate->kafka_options.scan_params.partition,
-                               festate->kafka_options.scan_params.offset) == -1)
+                               MAX(low, festate->kafka_options.scan_params.offset)) == -1)
     {
-        rd_kafka_resp_err_t err = rd_kafka_last_error();
+        err = rd_kafka_last_error();
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_ERROR),
                  errmsg_internal("kafka_fdw: Failed to start consuming: %s", rd_kafka_err2str(err))));
