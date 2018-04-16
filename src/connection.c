@@ -14,11 +14,11 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
     rd_kafka_topic_conf_t *topic_conf         = NULL;
     rd_kafka_t *           kafka_handle       = NULL;
     rd_kafka_topic_t *     kafka_topic_handle = NULL;
-    List *                 partition_list     = NIL; /* this one probably need a different mem context */
     KafkaOptions           k_options          = festate->kafka_options;
     int                    i;
     rd_kafka_resp_err_t    err;
     rd_kafka_conf_t *      conf;
+    KafKaPartitionList *   partition_list = NULL;
 
     /* brokers and topic should be validated just double check */
 
@@ -29,11 +29,10 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
 
     kafka_handle       = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
     kafka_topic_handle = NULL;
-    partition_list     = NIL;
 
     if (kafka_handle != NULL)
     {
-        const struct rd_kafka_metadata *metadata;
+        const struct rd_kafka_metadata *      metadata;
         const struct rd_kafka_metadata_topic *topic;
 
         /* Add brokers */
@@ -67,22 +66,26 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
             elog(ERROR, "%% Surprisingly got %d topics while 1 was expected", metadata->topic_cnt);
 
         /* Get partitions list for topic */
-        topic = &metadata->topics[0];
-        for (i = 0; i < topic->partition_cnt; i++)
+        partition_list                = palloc(sizeof(KafKaPartitionList));
+        topic                         = &metadata->topics[0];
+        partition_list->partition_cnt = topic->partition_cnt;
+        partition_list->partitions    = palloc0(partition_list->partition_cnt * sizeof(int32));
+
+        for (i = 0; i < partition_list->partition_cnt; i++)
         {
             const struct rd_kafka_metadata_partition *p;
-            p              = &topic->partitions[i];
-            partition_list = lappend_int(partition_list, p->id);
+            p                             = &topic->partitions[i];
+            partition_list->partitions[i] = p->id;
         }
 
         rd_kafka_metadata_destroy(metadata);
     }
 
-    if (kafka_handle == NULL || kafka_topic_handle == NULL || list_length(partition_list) == 0)
+    if (kafka_handle == NULL || kafka_topic_handle == NULL || partition_list->partition_cnt == 0)
     {
         festate->kafka_handle       = NULL;
         festate->kafka_topic_handle = NULL;
-        festate->partition_list     = NIL;
+        festate->partition_list     = NULL;
         return;
     }
 

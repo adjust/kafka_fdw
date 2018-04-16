@@ -9,6 +9,124 @@
 #define DatumGetIntArg(x, oid)                                                                                         \
     (oid == INT8OID ? DatumGetInt64(x) : oid == INT4OID ? DatumGetInt32(x) : DatumGetInt16(x))
 
+typedef enum scanfield
+{
+    FIELD_INVALID = -1,
+    FIELD_PARTITION,
+    FIELD_OFFSET
+} scanfield;
+
+static bool  valid_scanop(KafkaScanOp *scan_op);
+static List *append_scan_p(List *list, KafkaScanP *scan_p, int64 batch_size);
+
+KafkaScanOp *
+NewKafkaScanOp()
+{
+    KafkaScanOp *scan_op;
+
+    scan_op = (KafkaScanOp *) palloc(sizeof(*scan_op));
+
+    scan_op->pl          = 0;
+    scan_op->ph          = -1;
+    scan_op->ol          = 0;
+    scan_op->oh          = -1;
+    scan_op->oh_infinite = true;
+    scan_op->ph_infinite = true;
+
+    return scan_op;
+}
+
+static inline int32
+max_int32(int32 a, int32 b)
+{
+    int32 res = a > b ? a : b;
+
+    return res;
+}
+
+static inline int64
+max_int64(int64 a, int64 b)
+{
+    int64 res = a > b ? a : b;
+
+    return res;
+}
+
+static inline int32
+min_int32(int32 a, int32 b)
+{
+    int32 res = a < b ? a : b;
+
+    return res;
+}
+
+static inline int64
+min_int64(int64 a, int64 b)
+{
+    int64 res = a < b ? a : b;
+
+    return res;
+}
+
+static void
+set_scan_op(List *scan_list, kafka_op op, scanfield field, int64 val, ListCell *apply_from)
+{
+    ListCell *   lc;
+    KafkaScanOp *scan_op;
+
+    for_each_cell(lc, apply_from)
+    {
+        scan_op = (KafkaScanOp *) lfirst(lc);
+
+        if (field == FIELD_PARTITION)
+        {
+            DEBUGLOG("set_scan_op part %ld", val);
+            switch (op)
+            {
+                case OP_GTE: scan_op->pl = max_int32(scan_op->pl, val); break;
+                case OP_GT: scan_op->pl = max_int32(scan_op->pl, ++val); break;
+                case OP_EQ:
+                    scan_op->pl          = val;
+                    scan_op->ph          = val;
+                    scan_op->ph_infinite = false;
+                    break;
+                case OP_LT:
+                    /* if the high watermark is set we take the min otherwise the val */
+                    scan_op->ph          = scan_op->ph_infinite ? val : min_int32(scan_op->ph, --val);
+                    scan_op->ph_infinite = false;
+                    break;
+                case OP_LTE:
+                    scan_op->ph          = scan_op->ph_infinite ? val : min_int32(scan_op->ph, val);
+                    scan_op->ph_infinite = false;
+                    break;
+                default: break;
+            }
+        }
+        else if (field == FIELD_OFFSET)
+        {
+            DEBUGLOG("set_scan_op offset %ld", val);
+            switch (op)
+            {
+                case OP_GTE: scan_op->ol = max_int64(scan_op->ol, val); break;
+                case OP_GT: scan_op->ol = max_int64(scan_op->ol, ++val); break;
+                case OP_EQ:
+                    scan_op->ol = val;
+                    scan_op->oh = val;
+                    break;
+                case OP_LT:
+                    scan_op->oh          = scan_op->oh_infinite ? val : min_int64(scan_op->oh, --val);
+                    scan_op->oh_infinite = false;
+                    break;
+                case OP_LTE:
+                    scan_op->oh          = scan_op->oh_infinite ? val : min_int64(scan_op->oh, val);
+                    scan_op->oh_infinite = false;
+                    break;
+                default: break;
+            }
+        }
+    }
+}
+
 static int
 opername_to_op(const char *op)
 {
@@ -18,19 +136,20 @@ opername_to_op(const char *op)
         return OP_GT;
     if (strcmp(op, ">=") == 0)
         return OP_GTE;
-    /*
-        in a future release we might consider properly handling
-        of other operators as well for now we stop here
-    */
 
-    return OP_INVALID;
-
-    if (strcmp(op, "<>") == 0)
-        return OP_NEQ;
     if (strcmp(op, "<") == 0)
         return OP_LT;
     if (strcmp(op, "<=") == 0)
         return OP_LTE;
+
+    /*
+        in a future release we might consider properly handling
+        of other operators as well for now we stop here
+    */
+    return OP_INVALID;
+
+    if (strcmp(op, "<>") == 0)
+        return OP_NEQ;
     if (strcmp(op, "@>") == 0)
         return OP_ARRAYELEMS;
 
@@ -39,16 +158,21 @@ opername_to_op(const char *op)
 
 /*
     parse expressions to find relevant kafka scann infos
-    we consider only BOOL and OPERATOR expressions here
+    we consider && and || OPERATOR expressions here
     if it's one of usefull (see opername_to_op)
     one side must be a kafka column (partition or offset)
     the other side a constant
     if we see a bool exp we scan recursively
+
+    scan_list is what we parsed so far
+    expr is the Expression that we parse now
+    apply_from is the starting point of list from where we need to apply expr
 */
 
-bool
-kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
+List *
+kafkaParseExpression(List *scan_list, Expr *expr, int partition_attnum, int offset_attnum, ListCell *apply_from)
 {
+    DEBUGLOG("%s", __func__);
 
     HeapTuple        tuple;
     OpExpr *         oper;
@@ -56,14 +180,12 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
     Form_pg_operator form;
     Oid              rightargtype, op_oid;
     int              op;
-    int              partition_attnum = kafka_options->partition_attnum;
-    int              offset_attnum    = kafka_options->offset_attnum;
     Node *           varatt, *constatt, *left, *right;
     int              varattno;
     bool             need_commute = false; /* if we need to commute the operator */
 
     if (expr == NULL)
-        return false;
+        return scan_list;
 
     switch (nodeTag(expr))
     {
@@ -77,12 +199,12 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
             if (left == NULL)
             {
                 DEBUGLOG("no left side parameter");
-                return false;
+                return scan_list;
             }
             if (right == NULL)
             {
                 DEBUGLOG("no right side parameter");
-                return false;
+                return scan_list;
             }
 
             /* find wich part is the column */
@@ -94,12 +216,12 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
                 need_commute = true;
             }
             else
-                return false;
+                return scan_list;
 
             /* check that it's the right column */
             varattno = (int) ((Var *) varatt)->varattno;
             if (varattno != partition_attnum && varattno != offset_attnum)
-                return false;
+                return scan_list;
             /*
                 check that the other side is a constant
                 potentiallty we could also handel Parma i.e. parameterized queries
@@ -127,91 +249,55 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
             form         = (Form_pg_operator) GETSTRUCT(tuple);
             rightargtype = form->oprright;
             op           = opername_to_op(NameStr(form->oprname));
-            DEBUGLOG(
-              "T_OpExpr %s, leftargtype: %d, rightargtype: %d", NameStr(form->oprname), form->oprleft, rightargtype);
+            // DEBUGLOG(
+            // "T_OpExpr %s, leftargtype: %d, rightargtype: %d", NameStr(form->oprname), form->oprleft, rightargtype);
 
             ReleaseSysCache(tuple);
 
             if (!canHandleType(rightargtype))
             {
                 DEBUGLOG("can't handle type");
-                return false;
+                return scan_list;
             }
             if (op == OP_INVALID)
-                return false;
+                return scan_list;
+
+            int64 val = DatumGetIntArg(((Const *) constatt)->constvalue, rightargtype);
 
             if (varattno == partition_attnum)
             {
 
-                int64 val = DatumGetIntArg(((Const *) constatt)->constvalue, rightargtype);
-                if (val < 0)
-                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be greater than 0")));
                 if (val >= INT32_MAX)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition number out of range")));
-                if (op != OP_EQ)
-                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set using equal (=)")));
-                if (kafka_options->scan_params.partition > 0 && kafka_options->scan_params.partition != val)
-                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("scanning of multiple partitions not allowed")));
-                kafka_options->scan_params.partition = val;
+
+                set_scan_op(scan_list, op, FIELD_PARTITION, val, apply_from);
                 break;
             }
             if (varattno == offset_attnum)
             {
-                int64 val = DatumGetIntArg(((Const *) constatt)->constvalue, rightargtype);
-
-                // the first offset we found
-                if (kafka_options->scan_params.offset_op == OP_INVALID)
-                {
-                    // rewrite to GTE
-                    if (op == OP_GT)
-                    {
-                        kafka_options->scan_params.offset    = ++val;
-                        kafka_options->scan_params.offset_op = OP_GTE;
-                    }
-                    else
-                    {
-                        kafka_options->scan_params.offset    = val;
-                        kafka_options->scan_params.offset_op = op;
-                    }
-                    break;
-                }
-
-                if (kafka_options->scan_params.offset_op == OP_EQ && op == OP_EQ &&
-                    val != kafka_options->scan_params.offset)
-                    ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("scanning of multiple offsets not allowed")));
-
-                // we already found a GTE offset let's see if this one is even greater
-                if (kafka_options->scan_params.offset_op == OP_GTE && val >= kafka_options->scan_params.offset)
-                {
-                    // rewrite to GTE
-                    if (op == OP_GT)
-                    {
-                        kafka_options->scan_params.offset    = ++val;
-                        kafka_options->scan_params.offset_op = OP_GTE;
-                    }
-                    else
-                    {
-                        kafka_options->scan_params.offset    = val;
-                        kafka_options->scan_params.offset_op = op;
-                    }
-                    break;
-                }
+                set_scan_op(scan_list, op, FIELD_OFFSET, val, apply_from);
+                break;
             }
 
             break;
 
         case T_BoolExpr:
-            DEBUGLOG("BoolExpr");
             boolexpr = (BoolExpr *) expr;
             // AND_EXPR, OR_EXPR, NOT_EXPR
             switch (boolexpr->boolop)
             {
                 ListCell *cell;
+                ListCell *tail;
                 case AND_EXPR:
+                    /*
+                        all subexpressions need to apply from the current (outer) tail of the list
+                    */
+                    tail = list_tail(scan_list);
                     DEBUGLOG("AND EXPR");
                     foreach (cell, boolexpr->args)
                     {
-                        kafkaParseExpression(kafka_options, (Expr *) lfirst(cell));
+                        scan_list =
+                          kafkaParseExpression(scan_list, (Expr *) lfirst(cell), partition_attnum, offset_attnum, tail);
                     }
                     break;
 
@@ -219,13 +305,121 @@ kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr)
                     DEBUGLOG("OR EXPR");
                     foreach (cell, boolexpr->args)
                     {
-                        kafkaParseExpression(kafka_options, (Expr *) lfirst(cell));
+                        /* we apply the expression to the current tail */
+                        scan_list = kafkaParseExpression(
+                          scan_list, (Expr *) lfirst(cell), partition_attnum, offset_attnum, list_tail(scan_list));
+                        /* the otherside is appened to the list*/
+                        if (lnext(cell) != NULL)
+                            scan_list = lappend(scan_list, NewKafkaScanOp());
                     }
                     break;
 
-                case NOT_EXPR: return false; break;
+                case NOT_EXPR: return scan_list; break;
             }
-        default: return false;
+        default: return scan_list;
     }
-    return true;
+    return scan_list;
+}
+
+static int
+cmpfunc(const void *a, const void *b)
+{
+    return (*(int32 *) a - *(int32 *) b);
+}
+
+static bool
+partion_member(KafKaPartitionList *partition_list, int32 search_partition)
+{
+    int32 first, last, middle;
+    first  = 0;
+    last   = partition_list->partition_cnt;
+    middle = (first + last) / 2;
+
+    while (first <= last)
+    {
+        if (partition_list->partitions[middle] < search_partition)
+            first = middle + 1;
+        else if (partition_list->partitions[middle] == search_partition)
+        {
+            return true;
+        }
+        else
+            last = middle - 1;
+
+        middle = (first + last) / 2;
+    }
+
+    return false;
+}
+
+List *
+KafkaFlattenScanlist(List *scan_list, KafKaPartitionList *partition_list, int64 batch_size)
+{
+    ListCell *   lc;
+    KafkaScanOp *scan_op;
+    KafkaScanP * scan_p;
+    List *       result = NIL;
+    int32        p      = 0;
+    int32        pl, ph;
+
+    qsort(partition_list->partitions, partition_list->partition_cnt, sizeof(int32), cmpfunc);
+    pl = partition_list->partitions[0];
+    ph = partition_list->partitions[partition_list->partition_cnt - 1];
+
+    foreach (lc, scan_list)
+    {
+        scan_op = (KafkaScanOp *) lfirst(lc);
+        if (valid_scanop(scan_op))
+        {
+            for (p = max_int32(scan_op->pl, pl); p <= (scan_op->ph_infinite ? ph : min_int32(scan_op->ph, ph)); p++)
+            {
+                if (partion_member(partition_list, p))
+                {
+                    scan_p             = palloc(sizeof(KafkaScanP));
+                    scan_p->partition  = p;
+                    scan_p->offset     = scan_op->ol;
+                    scan_p->offset_lim = scan_op->oh_infinite ? -1 : scan_op->oh;
+                    result             = append_scan_p(result, scan_p, batch_size);
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+static List *
+append_scan_p(List *list, KafkaScanP *scan_p, int64 batch_size)
+{
+    ListCell *  lc;
+    KafkaScanP *cur_scan_p;
+
+    if (list == NIL)
+        return lappend(list, scan_p);
+
+    foreach (lc, list)
+    {
+        cur_scan_p = (KafkaScanP *) lfirst(lc);
+        if (cur_scan_p->partition == scan_p->partition)
+        {
+            // expand if overlap
+            // [a, b] overlaps with [x, y] if a <= y and x <= b.
+            if ((cur_scan_p->offset <= scan_p->offset_lim + batch_size || scan_p->offset_lim == -1) &&
+                (scan_p->offset <= cur_scan_p->offset_lim + batch_size || cur_scan_p->offset_lim == -1))
+            {
+                cur_scan_p->offset     = min_int64(cur_scan_p->offset, scan_p->offset);
+                cur_scan_p->offset_lim = cur_scan_p->offset_lim == -1 || scan_p->offset_lim == -1
+                                           ? -1
+                                           : max_int64(cur_scan_p->offset_lim, scan_p->offset_lim);
+                return list;
+            }
+        }
+    }
+    return lappend(list, scan_p);
+}
+
+static bool
+valid_scanop(KafkaScanOp *scan_op)
+{
+    return (scan_op->ph_infinite || scan_op->pl <= scan_op->ph) && (scan_op->oh_infinite || scan_op->ol <= scan_op->oh);
 }

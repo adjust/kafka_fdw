@@ -21,12 +21,12 @@ SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
 -- check that we parse the queries right or error out if needed
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
-              QUERY PLAN               
----------------------------------------
+                QUERY PLAN                
+------------------------------------------
  Foreign Scan on kafka_test_part
    Filter: ((offs = 1) AND (part = 0))
    Kafka topic: contrib_regress4
-   scanning: PARTITION = 0 OFFSET 1 
+   scanning: PARTITION = 0 AND OFFSET = 1
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 AND offs > 4 AND offs > 10 AND offs < 100;
@@ -35,34 +35,76 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 
  Foreign Scan on kafka_test_part
    Filter: ((offs > 4) AND (offs > 10) AND (offs < 100) AND (part = 1) AND (some_int = 3))
    Kafka topic: contrib_regress4
-   scanning: PARTITION = 1 OFFSET 11 
+   scanning: PARTITION = 1 AND OFFSET >= 11 AND OFFSET <= 100
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (part,offs)=(2,1);
-ERROR:  scanning of multiple partitions not allowed
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((offs = 1) AND ((part = 1) OR (part = 2)))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 AND OFFSET = 1
+   scanning: PARTITION = 2 AND OFFSET = 1
+(5 rows)
+
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(2,2)) ;
-ERROR:  scanning of multiple partitions not allowed
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: (((part = 1) AND (offs = 1)) OR ((part = 2) AND (offs = 2)))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 AND OFFSET = 1
+   scanning: PARTITION = 2 AND OFFSET = 2
+(5 rows)
+
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,2)) ;
-ERROR:  scanning of multiple offsets not allowed
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((part = 1) AND ((offs = 1) OR (offs = 2)))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 AND OFFSET = 1
+   scanning: PARTITION = 1 AND OFFSET = 2
+(5 rows)
+
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
-ERROR:  partition must be set in WHERE clause
+                 QUERY PLAN                 
+--------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: (some_int = 5)
+   Kafka topic: contrib_regress4
+   scanning: PARTITION >= 0 AND OFFSET >= 0
+(4 rows)
+
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
-              QUERY PLAN               
----------------------------------------
+                QUERY PLAN                 
+-------------------------------------------
  Foreign Scan on kafka_test_part
    Filter: ((offs > 5) AND (part = 1))
    Kafka topic: contrib_regress4
-   scanning: PARTITION = 1 OFFSET 6 
+   scanning: PARTITION = 1 AND OFFSET >= 6
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
-              QUERY PLAN               
----------------------------------------
+                QUERY PLAN                 
+-------------------------------------------
  Foreign Scan on kafka_test_part
    Filter: ((5 < offs) AND (1 = part))
    Kafka topic: contrib_regress4
-   scanning: PARTITION = 1 OFFSET 6 
+   scanning: PARTITION = 1 AND OFFSET >= 6
 (4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR (part = 4 and offs=7);
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((((part = 1) OR (part = 2)) AND (offs = 3)) OR ((part = 4) AND (offs = 7)))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 AND OFFSET = 3
+   scanning: PARTITION = 2 AND OFFSET = 3
+   scanning: PARTITION = 4 AND OFFSET = 7
+(6 rows)
 
 -- run some memload
 select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
@@ -120,6 +162,12 @@ UNION ALL
 SELECT COUNT(*) FROM kafka_test_part WHERE part = 4 AND offs >= 0
 )t;
   sum   
+--------
+ 100000
+(1 row)
+
+SELECT COUNT(*) FROM kafka_test_part;
+ count  
 --------
  100000
 (1 row)
@@ -339,4 +387,16 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100000 LIMIT 30;
  part | offs | some_int | some_text | some_date | some_time 
 ------+------+----------+-----------+-----------+-----------
 (0 rows)
+
+SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 100 AND 200) OR ((part = 1 AND offs BETWEEN 500 AND 600) );
+ count 
+-------
+   202
+(1 row)
+
+SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 1 AND 2) OR ((part = 1 AND offs BETWEEN 5 AND 6) );
+ count 
+-------
+     4
+(1 row)
 
