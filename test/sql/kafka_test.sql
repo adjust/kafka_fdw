@@ -33,6 +33,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs) IN((1,1),(1,
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE some_int = 5 ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR (part = 4 and offs=7);
 
 -- run some memload
 select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
@@ -56,6 +57,8 @@ UNION ALL
 SELECT COUNT(*) FROM kafka_test_part WHERE part = 4 AND offs >= 0
 )t;
 
+SELECT COUNT(*) FROM kafka_test_part;
+
 -- see that we can properly parse messages
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 0 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10 LIMIT 30;
@@ -65,3 +68,7 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 10000 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 90000 LIMIT 30;
 SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100000 LIMIT 30;
 
+
+
+SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 100 AND 200) OR ((part = 1 AND offs BETWEEN 500 AND 600) );
+SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 1 AND 2) OR ((part = 1 AND offs BETWEEN 5 AND 6) );

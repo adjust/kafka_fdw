@@ -34,8 +34,8 @@ static void            kafkaEndForeignScan(ForeignScanState *node);
  */
 
 static bool check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List **columns);
-static void kafkaStop(KafkaFdwExecutionState *festate);
-static void kafkaStart(KafkaFdwExecutionState *festate);
+static bool kafkaStop(KafkaFdwExecutionState *festate);
+static bool kafkaStart(KafkaFdwExecutionState *festate);
 
 static List *kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelation, int subplan_index);
 static void  kafkaBeginForeignModify(ModifyTableState *mtstate,
@@ -128,8 +128,10 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     List *             options = NIL;
     Relation           relation;
     List *             conditions = baserel->baserestrictinfo;
-    ListCell *         lc;
+    ListCell *         lc, *tail;
     KafkaOptions *     kafka_options = &fdw_private->kafka_options;
+    KafkaScanOp *      scann_op;
+    List *             scan_list;
 
     relation = relation_open(foreigntableid, AccessShareLock);
 
@@ -141,18 +143,43 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     kafka_options->scan_params.partition = -1;
     kafka_options->scan_params.offset    = -1;
 
+    scann_op  = NewKafkaScanOp();
+    scan_list = list_make1(scann_op);
+    /*
+     * NOTE head and tail are equal here tail is used here
+     * to match implementation in kafkaParseExpression
+     * read as each outer ANDed condition must be applied to the
+     * whole scan_list
+     */
+    tail = list_tail(scan_list);
     foreach (lc, conditions)
     {
-        kafkaParseExpression(kafka_options, ((RestrictInfo *) lfirst(lc))->clause);
+        scan_list = kafkaParseExpression(scan_list,
+                                         ((RestrictInfo *) lfirst(lc))->clause,
+                                         kafka_options->partition_attnum,
+                                         kafka_options->offset_attnum,
+                                         tail);
+    }
+
+    foreach (lc, scan_list)
+    {
+        DEBUGLOG("part_low %d, part_high %d, offset_low %ld, offset_high %ld, phi: %d, ohi: %d",
+                 ((KafkaScanOp *) lfirst(lc))->pl,
+                 ((KafkaScanOp *) lfirst(lc))->ph,
+                 ((KafkaScanOp *) lfirst(lc))->ol,
+                 ((KafkaScanOp *) lfirst(lc))->oh,
+                 ((KafkaScanOp *) lfirst(lc))->ph_infinite,
+                 ((KafkaScanOp *) lfirst(lc))->oh_infinite);
     }
 
     if (kafka_options->scan_params.partition == -1)
     {
-        ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set in WHERE clause")));
+        // ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set in WHERE clause")));
     }
 
     /* we pass the kafka and parse options for scanning */
-    options = list_make2(kafka_options, &fdw_private->parse_options);
+    /* TODO kafka_options is not needed anymore */
+    options = list_make3(kafka_options, &fdw_private->parse_options, scan_list);
 
     /* Decide whether to selectively perform binary conversion */
     if (check_selective_binary_conversion(baserel, foreigntableid, &columns))
@@ -233,12 +260,30 @@ kafkaGetForeignPlan(PlannerInfo *root,
 
 /* helper function to return a stringified version of scan params */
 static char *
-KafkaScanParamsToString(KafkaScanParams *param)
+KafkaScanOpToString(KafkaScanOp *scanop)
 {
     StringInfoData buf;
 
     initStringInfo(&buf);
-    appendStringInfo(&buf, "PARTITION = %d OFFSET %ld ", param->partition, param->offset);
+
+    if (scanop->ph == scanop->pl)
+        appendStringInfo(&buf, "PARTITION = %d", scanop->pl);
+    else
+    {
+        appendStringInfo(&buf, "PARTITION >= %d", scanop->pl);
+        if (!scanop->ph_infinite)
+            appendStringInfo(&buf, " AND PARTITION <= %d", scanop->ph);
+    }
+
+    if (scanop->oh == scanop->ol)
+        appendStringInfo(&buf, " AND OFFSET = %ld", scanop->ol);
+    else
+    {
+        appendStringInfo(&buf, " AND OFFSET >= %ld", scanop->ol);
+        if (!scanop->oh_infinite)
+            appendStringInfo(&buf, " AND OFFSET <= %ld", scanop->oh);
+    }
+
     return buf.data;
 }
 
@@ -251,14 +296,22 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
 
     KafkaOptions kafka_options;
+    ListCell *   lc;
+    KafkaScanOp *scanop;
     List *       fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     kafka_options            = *(KafkaOptions *) list_nth(fdw_private, 0);
+    List *scan_list          = (List *) list_nth(fdw_private, 2);
 
     /* Fetch options --- we only need topic at this point */
     // kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, &parse_options);
 
     ExplainPropertyText("Kafka topic", kafka_options.topic, es);
-    ExplainPropertyText("scanning", KafkaScanParamsToString(&kafka_options.scan_params), es);
+    foreach (lc, scan_list)
+    {
+        scanop = (KafkaScanOp *) lfirst(lc);
+        if ((scanop->ph_infinite || scanop->pl <= scanop->ph) && (scanop->oh_infinite || scanop->ol <= scanop->oh))
+            ExplainPropertyText("scanning", KafkaScanOpToString(scanop), es);
+    }
 }
 
 /*
@@ -282,12 +335,14 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     Oid                     in_func_oid;
     List *                  attnums = NIL;
     List *                  fdw_private;
+    List *                  scan_list;
 
     DEBUGLOG("%s", __func__);
 
     fdw_private   = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     kafka_options = *(KafkaOptions *) list_nth(fdw_private, 0);
     parse_options = *(ParseOptions *) list_nth(fdw_private, 1);
+    scan_list     = (List *) list_nth(fdw_private, 2);
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
@@ -299,7 +354,8 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     }
 
     /* setup execution state */
-    festate = (KafkaFdwExecutionState *) palloc0(sizeof(KafkaFdwExecutionState));
+    festate                   = (KafkaFdwExecutionState *) palloc0(sizeof(KafkaFdwExecutionState));
+    festate->current_part_num = 0;
 
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
@@ -367,6 +423,7 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     {
         KafkaFdwGetConnection(festate, errstr);
     }
+
     if (festate->kafka_handle == NULL)
     {
         ereport(ERROR,
@@ -380,7 +437,8 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
           ERROR,
           (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", kafka_options.topic)));
 
-    festate->buffer = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
+    festate->scan_list = KafkaFlattenScanlist(scan_list, festate->partition_list, kafka_options.batch_size);
+    festate->buffer    = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
     kafkaStart(festate);
 }
@@ -411,6 +469,8 @@ kafkaIterateForeignScan(ForeignScanState *node)
     MemoryContext           ccxt          = CurrentMemoryContext;
     int                     fldct;
     bool                    error = false;
+    List *                  scan_list;
+    KafkaScanP *            scan_p;
 
     if (kafka_options->junk_error_attnum != -1)
         resetStringInfo(&festate->junk_buf);
@@ -429,17 +489,72 @@ kafkaIterateForeignScan(ForeignScanState *node)
      */
     ExecClearTuple(slot);
 
+    /* get a message from the buffer if available */
+    if (festate->buffer_cursor < festate->buffer_count)
+    {
+        message = festate->buffer[festate->buffer_cursor];
+        /*
+         * if the message gotten is the last one,
+         * we iterate onto the next partition  and run into the while loop below
+         */
+        if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
+        {
+            DEBUGLOG("kafka_fdw has reached the end of the queue 1");
+            kafkaStop(festate);
+            kafkaStart(festate);
+        }
+        else if (message->err != RD_KAFKA_RESP_ERR_NO_ERROR)
+        {
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_ERROR),
+                     errmsg_internal("kafka_fdw got an error %s when fetching a message from queue",
+                                     rd_kafka_err2str(message->err))));
+        }
+
+        /*
+         * if requested offset high is not infinite
+         * check that we did not run over requested offset
+         */
+
+        scan_list = festate->scan_list;
+        if (scan_list != NIL)
+        { // list is done we're finished //
+            scan_p = (KafkaScanP *) linitial(scan_list);
+
+            if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
+            {
+                DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
+                kafkaStop(festate);
+                kafkaStart(festate);
+            }
+        }
+        /**/
+    }
+
     /*
      * Request more messages
      * if we have already returned all the remaining ones
      */
-    if (festate->buffer_cursor >= festate->buffer_count)
+    while (festate->buffer_cursor >= festate->buffer_count)
     {
+
+        scan_list = festate->scan_list;
+
+        if (scan_list == NIL)
+        { /* list is done we're finished */
+            DEBUGLOG("done scanning");
+            return slot;
+        }
+
+        scan_p = (KafkaScanP *) linitial(scan_list);
+
         festate->buffer_count = rd_kafka_consume_batch(festate->kafka_topic_handle,
-                                                       kafka_options->scan_params.partition,
+                                                       scan_p->partition,
                                                        kafka_options->buffer_delay,
                                                        festate->buffer,
                                                        kafka_options->batch_size);
+
+        DEBUGLOG("scanned more data %zd", festate->buffer_count);
 
         if (festate->buffer_count == -1)
             ereport(
@@ -448,27 +563,32 @@ kafkaIterateForeignScan(ForeignScanState *node)
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
         festate->buffer_cursor = 0;
+
+        if (festate->buffer_count <= 0)
+        {
+            kafkaStop(festate);
+            kafkaStart(festate);
+        }
+        else
+        {
+            message = festate->buffer[festate->buffer_cursor];
+            if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
+            {
+                DEBUGLOG("kafka_fdw has reached the end of the queue2");
+                kafkaStop(festate);
+                kafkaStart(festate);
+            }
+            else if (message->err != RD_KAFKA_RESP_ERR_NO_ERROR)
+            {
+                ereport(ERROR,
+                        (errcode(ERRCODE_FDW_ERROR),
+                         errmsg_internal("kafka_fdw got an error %s when fetching a message from queue",
+                                         rd_kafka_err2str(message->err))));
+            }
+        }
     }
 
-    /* Still no data */
-    if (festate->buffer_cursor >= festate->buffer_count)
-        return slot;
-
-    message = festate->buffer[festate->buffer_cursor];
-
-    /* This also means there is no data */
-    if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
-    {
-        DEBUGLOG("kafka_fdw has reached the end of the queue");
-        return slot;
-    }
-
-    if (message->err != RD_KAFKA_RESP_ERR_NO_ERROR)
-    {
-        ereport(ERROR,
-                (errcode(ERRCODE_FDW_ERROR),
-                 errmsg_internal("kafka_fdw got an error %d when fetching a message from queue", message->err)));
-    }
+    // DEBUGLOG("kafka_fdw offset <%lld> list %d", message->offset, list_length(festate->scan_list));
 
     tupDesc   = RelationGetDescr(node->ss.ss_currentRelation);
     attr      = tupDesc->attrs;
@@ -477,7 +597,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     values = palloc0(num_attrs * sizeof(Datum));
     nulls  = palloc0(num_attrs * sizeof(bool));
 
-    DEBUGLOG("message: %s", message->payload);
+    // DEBUGLOG("message: %s", message->payload);
 
     fldct = KafkaReadAttributes(message->payload, message->len, festate, parse_options->format, &error);
 
@@ -655,17 +775,6 @@ kafkaEndForeignScan(ForeignScanState *node)
     /* Stop consuming */
     kafkaStop(festate);
 
-    /* release unconsumed messages */
-    while (festate->buffer_count > festate->buffer_cursor)
-    {
-
-        rd_kafka_message_t *message;
-        message = festate->buffer[festate->buffer_cursor];
-
-        rd_kafka_message_destroy(message);
-        festate->buffer_cursor++;
-    }
-
     // MemoryContextReset(festate->batch_cxt);
     kafkaCloseConnection(festate);
 
@@ -791,54 +900,80 @@ check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List 
     return true;
 }
 
-static void
+static bool
 kafkaStop(KafkaFdwExecutionState *festate)
 {
-    if (rd_kafka_consume_stop(festate->kafka_topic_handle, festate->kafka_options.scan_params.partition) == -1)
+    DEBUGLOG("%s", __func__);
+
+    KafkaScanP *scan_p;
+    List *      scan_list = festate->scan_list;
+
+    if (scan_list == NIL)
+        return false;
+
+    scan_p = (KafkaScanP *) linitial(scan_list);
+
+    if (rd_kafka_consume_stop(festate->kafka_topic_handle, scan_p->partition) == -1)
     {
         rd_kafka_resp_err_t err = rd_kafka_last_error();
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_ERROR),
                  errmsg_internal("kafka_fdw: Failed to stop consuming: %s", rd_kafka_err2str(err))));
     }
+
+    /* release unconsumed messages */
+    while (festate->buffer_count > festate->buffer_cursor)
+    {
+
+        rd_kafka_message_t *message;
+        message = festate->buffer[festate->buffer_cursor];
+
+        rd_kafka_message_destroy(message);
+        festate->buffer_cursor++;
+    }
+
+    festate->scan_list = list_delete_first(festate->scan_list);
+    return true;
 }
-static void
+static bool
 kafkaStart(KafkaFdwExecutionState *festate)
 {
     rd_kafka_resp_err_t err;
     int64_t             low, high = 0;
+    List *              scan_list = festate->scan_list;
+    festate->buffer_count         = 0;
+    festate->buffer_cursor        = 0;
 
-    DEBUGLOG("%s part: %d, offs: %ld, topic: %s",
-             __func__,
-             festate->kafka_options.scan_params.partition,
-             festate->kafka_options.scan_params.offset,
-             festate->kafka_options.topic);
+    if (scan_list == NIL)
+        return false;
 
-    festate->buffer_count  = 0;
-    festate->buffer_cursor = 0;
+    KafkaScanP *scan_p = (KafkaScanP *) linitial(scan_list);
 
-    err = rd_kafka_query_watermark_offsets(festate->kafka_handle,
-                                           festate->kafka_options.topic,
-                                           festate->kafka_options.scan_params.partition,
-                                           &low,
-                                           &high,
-                                           WARTERMARK_TIMEOUT);
+    err = rd_kafka_query_watermark_offsets(
+      festate->kafka_handle, festate->kafka_options.topic, scan_p->partition, &low, &high, WARTERMARK_TIMEOUT);
 
     if (err != RD_KAFKA_RESP_ERR_NO_ERROR && err != RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION)
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_ERROR),
                  errmsg_internal("kafka_fdw: Failed to get watermarks %s", rd_kafka_err2str(err))));
 
+    DEBUGLOG("%s part: %d, offs: %lld (%ld / %lld), topic: %s",
+             __func__,
+             scan_p->partition,
+             MAX(low, scan_p->offset),
+             scan_p->offset,
+             low,
+             festate->kafka_options.topic);
+
     /* Start consuming */
-    if (rd_kafka_consume_start(festate->kafka_topic_handle,
-                               festate->kafka_options.scan_params.partition,
-                               MAX(low, festate->kafka_options.scan_params.offset)) == -1)
+    if (rd_kafka_consume_start(festate->kafka_topic_handle, scan_p->partition, MAX(low, scan_p->offset)) == -1)
     {
         err = rd_kafka_last_error();
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_ERROR),
                  errmsg_internal("kafka_fdw: Failed to start consuming: %s", rd_kafka_err2str(err))));
     }
+    return true;
 }
 
 /* operations for inserts */

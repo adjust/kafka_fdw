@@ -100,7 +100,7 @@ KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, 
     char *cur_ptr;
     char *line_end_ptr;
 
-    DEBUGLOG("%s", __func__);
+    // DEBUGLOG("%s", __func__);
 
     *unterminated_error = false;
     resetStringInfo(&festate->attribute_buf);

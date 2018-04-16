@@ -59,7 +59,7 @@ enum kafka_msg_format
     CSV
 };
 
-enum kafka_op
+typedef enum kafka_op
 {
     OP_INVALID = -1,
     OP_NEQ,       /* <> */
@@ -69,7 +69,7 @@ enum kafka_op
     OP_GT,        /* > */
     OP_GTE,       /* >= */
     OP_ARRAYELEMS /* @> */
-};
+} kafka_op;
 
 typedef struct KafkaScanParams
 {
@@ -77,6 +77,29 @@ typedef struct KafkaScanParams
     int32         partition;
     int64         offset;
 } KafkaScanParams;
+
+typedef struct KafkaScanOp
+{
+    int32 pl;          /* lower boundary of partition */
+    int32 ph;          /* upper boundary of partition */
+    int64 ol;          /* lower boundary of offset */
+    int64 oh;          /* upper boundary of offset */
+    bool  oh_infinite; /* high watermark infinite*/
+    bool  ph_infinite;
+} KafkaScanOp;
+
+typedef struct KafkaScanP
+{
+    int32 partition;
+    int64 offset;
+    int64 offset_lim;
+} KafkaScanP;
+
+typedef struct KafKaPartitionList
+{
+    int32  partition_cnt;
+    int32 *partitions;
+} KafKaPartitionList;
 
 typedef struct KafkaOptions
 {
@@ -135,7 +158,9 @@ typedef struct KafkaFdwExecutionState
     FmgrInfo *           in_functions;       /* array of input functions for each attrs */
     Oid *                typioparams;        /* array of element types for in_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
-    List *               partition_list;     /* integer list of partitions */
+    List *               scan_list;          /* list of KafkaScanP to scan */
+    KafKaPartitionList * partition_list;     /* list and count of partitions */
+    int32                current_part_num;   /* iterator of curently scanned partition of partition_list */
     StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
     char **              attnames;           /* pointer into attname_buf */
 
@@ -172,7 +197,10 @@ void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
 
 /* kafka_expr.c */
-bool kafkaParseExpression(KafkaOptions *kafka_options, Expr *expr);
+List *kafkaParseExpression(List *scan_list, Expr *expr, int partition_attnum, int offset_attnum, ListCell *start);
+List *KafkaFlattenScanlist(List *scan_list, KafKaPartitionList *partition_list, int64 batch_size);
+
+KafkaScanOp *NewKafkaScanOp(void);
 
 /* parser.c */
 int  KafkaReadAttributes(char *                  msg,
