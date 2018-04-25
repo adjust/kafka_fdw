@@ -129,19 +129,13 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     Relation           relation;
     List *             conditions = baserel->baserestrictinfo;
     ListCell *         lc, *tail;
-    KafkaOptions *     kafka_options = &fdw_private->kafka_options;
     KafkaScanOp *      scann_op;
-    List *             scan_list;
+    List *             scan_list, *scan_node_list;
+    KafkaOptions *     kafka_options = &fdw_private->kafka_options;
 
     relation = relation_open(foreigntableid, AccessShareLock);
 
-    /*
-     * write offset and partition to kafka_options.
-     * general table options are already filled  during GetForeignRelSize
-     */
-    kafka_options->scan_params.offset_op = OP_INVALID;
-    kafka_options->scan_params.partition = -1;
-    kafka_options->scan_params.offset    = -1;
+    /* parse filter conditions to scan kafka */
 
     scann_op  = NewKafkaScanOp();
     scan_list = list_make1(scann_op);
@@ -161,8 +155,17 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
                                          tail);
     }
 
+    /*
+     * convert the list to a list of list of const
+     * this is neede as the fdw_private list must be copiable by copyObject()
+     * see comment for ForeignScan node in plannodes.h
+     */
+    scan_node_list = NIL;
+
     foreach (lc, scan_list)
     {
+        scan_node_list = lappend(scan_node_list, KafkaScanOpToList((KafkaScanOp *) lfirst(lc)));
+
         DEBUGLOG("part_low %d, part_high %d, offset_low %ld, offset_high %ld, phi: %d, ohi: %d",
                  ((KafkaScanOp *) lfirst(lc))->pl,
                  ((KafkaScanOp *) lfirst(lc))->ph,
@@ -172,14 +175,9 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
                  ((KafkaScanOp *) lfirst(lc))->oh_infinite);
     }
 
-    if (kafka_options->scan_params.partition == -1)
-    {
-        // ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition must be set in WHERE clause")));
-    }
-
     /* we pass the kafka and parse options for scanning */
     /* TODO kafka_options is not needed anymore */
-    options = list_make3(kafka_options, &fdw_private->parse_options, scan_list);
+    options = list_make1(scan_node_list);
 
     /* Decide whether to selectively perform binary conversion */
     if (check_selective_binary_conversion(baserel, foreigntableid, &columns))
@@ -260,28 +258,28 @@ kafkaGetForeignPlan(PlannerInfo *root,
 
 /* helper function to return a stringified version of scan params */
 static char *
-KafkaScanOpToString(KafkaScanOp *scanop)
+KafkaScanOpListToString(List *scanop)
 {
     StringInfoData buf;
 
     initStringInfo(&buf);
 
-    if (scanop->ph == scanop->pl)
-        appendStringInfo(&buf, "PARTITION = %d", scanop->pl);
+    if (ScanopListGetPh(scanop) == ScanopListGetPl(scanop))
+        appendStringInfo(&buf, "PARTITION = %d", ScanopListGetPl(scanop));
     else
     {
-        appendStringInfo(&buf, "PARTITION >= %d", scanop->pl);
-        if (!scanop->ph_infinite)
-            appendStringInfo(&buf, " AND PARTITION <= %d", scanop->ph);
+        appendStringInfo(&buf, "PARTITION >= %d", ScanopListGetPl(scanop));
+        if (!ScanopListGetPhInvinite(scanop))
+            appendStringInfo(&buf, " AND PARTITION <= %d", ScanopListGetPh(scanop));
     }
 
-    if (scanop->oh == scanop->ol)
-        appendStringInfo(&buf, " AND OFFSET = %ld", scanop->ol);
+    if (ScanopListGetOh(scanop) == ScanopListGetOl(scanop))
+        appendStringInfo(&buf, " AND OFFSET = %ld", ScanopListGetOl(scanop));
     else
     {
-        appendStringInfo(&buf, " AND OFFSET >= %ld", scanop->ol);
-        if (!scanop->oh_infinite)
-            appendStringInfo(&buf, " AND OFFSET <= %ld", scanop->oh);
+        appendStringInfo(&buf, " AND OFFSET >= %ld", ScanopListGetOl(scanop));
+        if (!ScanopListGetOhInvinite(scanop))
+            appendStringInfo(&buf, " AND OFFSET <= %ld", ScanopListGetOh(scanop));
     }
 
     return buf.data;
@@ -295,22 +293,22 @@ static void
 kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
 
-    KafkaOptions kafka_options;
+    DEBUGLOG("%s", __func__);
+    KafkaOptions kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ListCell *   lc;
-    KafkaScanOp *scanop;
+    List *       scanop;
     List *       fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
-    kafka_options            = *(KafkaOptions *) list_nth(fdw_private, 0);
-    List *scan_list          = (List *) list_nth(fdw_private, 2);
+    List *       scan_list   = (List *) list_nth(fdw_private, 0);
 
     /* Fetch options --- we only need topic at this point */
-    // kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, &parse_options);
+    kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, NULL);
 
     ExplainPropertyText("Kafka topic", kafka_options.topic, es);
     foreach (lc, scan_list)
     {
-        scanop = (KafkaScanOp *) lfirst(lc);
-        if ((scanop->ph_infinite || scanop->pl <= scanop->ph) && (scanop->oh_infinite || scanop->ol <= scanop->oh))
-            ExplainPropertyText("scanning", KafkaScanOpToString(scanop), es);
+        scanop = (List *) lfirst(lc);
+        if (kafka_valid_scanop_list(scanop))
+            ExplainPropertyText("scanning", KafkaScanOpListToString(scanop), es);
     }
 }
 
@@ -322,7 +320,7 @@ static void
 kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 {
     // ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
-    KafkaOptions            kafka_options = {};
+    KafkaOptions            kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ParseOptions            parse_options = {};
     KafkaFdwExecutionState *festate;
     char                    errstr[KAFKA_MAX_ERR_MSG];
@@ -339,10 +337,12 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 
     DEBUGLOG("%s", __func__);
 
-    fdw_private   = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
-    kafka_options = *(KafkaOptions *) list_nth(fdw_private, 0);
-    parse_options = *(ParseOptions *) list_nth(fdw_private, 1);
-    scan_list     = (List *) list_nth(fdw_private, 2);
+    fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
+    kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, &parse_options);
+
+    scan_list = (List *) list_nth(fdw_private, 0);
+
+    DEBUGLOG("scanlistlength %d", list_length(scan_list));
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.

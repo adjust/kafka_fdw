@@ -16,7 +16,6 @@ typedef enum scanfield
     FIELD_OFFSET
 } scanfield;
 
-static bool  valid_scanop(KafkaScanOp *scan_op);
 static List *append_scan_p(List *list, KafkaScanP *scan_p, int64 batch_size);
 
 KafkaScanOp *
@@ -154,6 +153,18 @@ opername_to_op(const char *op)
         return OP_ARRAYELEMS;
 
     return OP_INVALID;
+}
+
+List *
+KafkaScanOpToList(KafkaScanOp *scan_op)
+{
+    return list_make4(
+      (void *) makeConst(INT8OID, -1, InvalidOid, sizeof(int32), Int32GetDatum(scan_op->pl), false, true),
+      (void *) makeConst(
+        INT8OID, -1, InvalidOid, sizeof(int32), Int32GetDatum(scan_op->ph), scan_op->ph_infinite, true),
+      (void *) makeConst(INT8OID, -1, InvalidOid, sizeof(int64), Int64GetDatum(scan_op->ol), false, FLOAT8PASSBYVAL),
+      (void *) makeConst(
+        INT8OID, -1, InvalidOid, sizeof(int64), Int64GetDatum(scan_op->oh), scan_op->oh_infinite, FLOAT8PASSBYVAL));
 }
 
 /*
@@ -355,12 +366,13 @@ partion_member(KafKaPartitionList *partition_list, int32 search_partition)
 List *
 KafkaFlattenScanlist(List *scan_list, KafKaPartitionList *partition_list, int64 batch_size)
 {
-    ListCell *   lc;
-    KafkaScanOp *scan_op;
-    KafkaScanP * scan_p;
-    List *       result = NIL;
-    int32        p      = 0;
-    int32        pl, ph;
+    ListCell *  lc;
+    List *      scan_op_list;
+    KafkaScanP *scan_p;
+    List *      result = NIL;
+    int32       p      = 0;
+    int32       pl, ph, sopl, soph;
+    bool        sophi;
 
     qsort(partition_list->partitions, partition_list->partition_cnt, sizeof(int32), cmpfunc);
     pl = partition_list->partitions[0];
@@ -368,17 +380,22 @@ KafkaFlattenScanlist(List *scan_list, KafKaPartitionList *partition_list, int64 
 
     foreach (lc, scan_list)
     {
-        scan_op = (KafkaScanOp *) lfirst(lc);
-        if (valid_scanop(scan_op))
+        scan_op_list = (List *) lfirst(lc);
+        if (kafka_valid_scanop_list(scan_op_list))
         {
-            for (p = max_int32(scan_op->pl, pl); p <= (scan_op->ph_infinite ? ph : min_int32(scan_op->ph, ph)); p++)
+            sopl  = ScanopListGetPl(scan_op_list);
+            soph  = ScanopListGetPh(scan_op_list);
+            sophi = ScanopListGetPhInvinite(scan_op_list);
+            DEBUGLOG("pl %d, ph %d, phi %d", sopl, soph, sophi);
+
+            for (p = max_int32(sopl, pl); p <= (sophi ? ph : min_int32(soph, ph)); p++)
             {
                 if (partion_member(partition_list, p))
                 {
                     scan_p             = palloc(sizeof(KafkaScanP));
                     scan_p->partition  = p;
-                    scan_p->offset     = scan_op->ol;
-                    scan_p->offset_lim = scan_op->oh_infinite ? -1 : scan_op->oh;
+                    scan_p->offset     = ScanopListGetOl(scan_op_list);
+                    scan_p->offset_lim = (ScanopListGetOhInvinite(scan_op_list)) ? -1 : ScanopListGetOh(scan_op_list);
                     result             = append_scan_p(result, scan_p, batch_size);
                 }
             }
@@ -418,8 +435,21 @@ append_scan_p(List *list, KafkaScanP *scan_p, int64 batch_size)
     return lappend(list, scan_p);
 }
 
-static bool
-valid_scanop(KafkaScanOp *scan_op)
+bool
+kafka_valid_scanop_list(List *scan_op_list)
 {
-    return (scan_op->ph_infinite || scan_op->pl <= scan_op->ph) && (scan_op->oh_infinite || scan_op->ol <= scan_op->oh);
+    int32 pl, ph;
+    int64 ol, oh;
+    bool  ph_infinite, oh_infinite;
+
+    pl          = ScanopListGetPl(scan_op_list);
+    ph          = ScanopListGetPh(scan_op_list);
+    ol          = ScanopListGetOl(scan_op_list);
+    oh          = ScanopListGetOh(scan_op_list);
+    ph_infinite = ScanopListGetPhInvinite(scan_op_list);
+    oh_infinite = ScanopListGetOhInvinite(scan_op_list);
+
+    DEBUGLOG("FOUND pl %d, ph %d, ol %ld, oh %ld, pli %d, ohi %d", pl, ph, ol, oh, ph_infinite, oh_infinite);
+
+    return (ph_infinite || pl <= ph) && (oh_infinite || ol <= oh);
 }
