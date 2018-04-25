@@ -52,6 +52,13 @@
     (_attn != _kop.junk_attnum && _attn != _kop.junk_error_attnum && _attn != _kop.partition_attnum &&                 \
      _attn != _kop.offset_attnum)
 
+#define ScanopListGetPl(l) (DatumGetInt32(((Const *) list_nth(l, PartitionLow))->constvalue))
+#define ScanopListGetPh(l) (DatumGetInt32(((Const *) list_nth(l, PartitionHigh))->constvalue))
+#define ScanopListGetOl(l) (DatumGetInt64(((Const *) list_nth(l, OffsetLow))->constvalue))
+#define ScanopListGetOh(l) (DatumGetInt64(((Const *) list_nth(l, OffsetHigh))->constvalue))
+#define ScanopListGetPhInvinite(l) (DatumGetInt32(((Const *) list_nth(l, PartitionHigh))->constisnull))
+#define ScanopListGetOhInvinite(l) (DatumGetInt32(((Const *) list_nth(l, OffsetHigh))->constisnull))
+
 enum kafka_msg_format
 {
     INVALID = -1,
@@ -70,6 +77,14 @@ typedef enum kafka_op
     OP_GTE,       /* >= */
     OP_ARRAYELEMS /* @> */
 } kafka_op;
+
+enum ScanOpListIndex
+{
+    PartitionLow,
+    PartitionHigh,
+    OffsetLow,
+    OffsetHigh
+};
 
 typedef struct KafkaScanParams
 {
@@ -197,8 +212,11 @@ void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
 
 /* kafka_expr.c */
+
 List *kafkaParseExpression(List *scan_list, Expr *expr, int partition_attnum, int offset_attnum, ListCell *start);
 List *KafkaFlattenScanlist(List *scan_list, KafKaPartitionList *partition_list, int64 batch_size);
+List *KafkaScanOpToList(KafkaScanOp *scan_op);
+bool  kafka_valid_scanop_list(List *scan_op_list);
 
 KafkaScanOp *NewKafkaScanOp(void);
 

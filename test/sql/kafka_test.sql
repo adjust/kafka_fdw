@@ -72,3 +72,8 @@ SELECT * FROM kafka_test_single_part WHERE part = 0 AND offs > 100000 LIMIT 30;
 
 SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 100 AND 200) OR ((part = 1 AND offs BETWEEN 500 AND 600) );
 SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 1 AND 2) OR ((part = 1 AND offs BETWEEN 5 AND 6) );
+
+
+PREPARE kafka_test(int,bigint,bigint, int,bigint,bigint) AS SELECT COUNT(*) FROM kafka_test_part WHERE (part = $1 AND offs BETWEEN $2 AND $3) OR ((part = $4 AND offs BETWEEN $5 AND $6) );
+EXPLAIN EXECUTE kafka_test(1,100,200,1,500,600);
+EXPLAIN EXECUTE kafka_test(1,10,2,1,5,6);

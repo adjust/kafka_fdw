@@ -400,3 +400,25 @@ SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 1 AND 2) O
      4
 (1 row)
 
+PREPARE kafka_test(int,bigint,bigint, int,bigint,bigint) AS SELECT COUNT(*) FROM kafka_test_part WHERE (part = $1 AND offs BETWEEN $2 AND $3) OR ((part = $4 AND offs BETWEEN $5 AND $6) );
+EXPLAIN EXECUTE kafka_test(1,100,200,1,500,600);
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=13.45..13.46 rows=1 width=8)
+   ->  Foreign Scan on kafka_test_part  (cost=0.00..13.38 rows=30 width=0)
+         Filter: ((part = 1) AND (((offs >= '100'::bigint) AND (offs <= '200'::bigint)) OR ((offs >= '500'::bigint) AND (offs <= '600'::bigint))))
+         Kafka topic: contrib_regress4
+         scanning: PARTITION = 1 AND OFFSET >= 100 AND OFFSET <= 200
+         scanning: PARTITION = 1 AND OFFSET >= 500 AND OFFSET <= 600
+(6 rows)
+
+EXPLAIN EXECUTE kafka_test(1,10,2,1,5,6);
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=13.45..13.46 rows=1 width=8)
+   ->  Foreign Scan on kafka_test_part  (cost=0.00..13.38 rows=30 width=0)
+         Filter: ((part = 1) AND (((offs >= '10'::bigint) AND (offs <= '2'::bigint)) OR ((offs >= '5'::bigint) AND (offs <= '6'::bigint))))
+         Kafka topic: contrib_regress4
+         scanning: PARTITION = 1 AND OFFSET >= 5 AND OFFSET <= 6
+(5 rows)
+
