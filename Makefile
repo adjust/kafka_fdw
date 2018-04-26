@@ -5,9 +5,9 @@ EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/def
 DATA 		 = $(wildcard *--*.sql)
 # DOCS         = $(wildcard doc/*.md)
 TESTS        = $(wildcard test/sql/*.sql)
-REGRESS      = $(patsubst test/sql/%.sql,%,$(TESTS))
+REGRESS      ?= $(patsubst test/sql/%.sql,%,$(TESTS))
 REGRESS_OPTS = --inputdir=test --load-extension=$(EXTENSION)
-EXTRA_CLEAN = $(EXTENSION)--$(EXTVERSION).sql
+EXTRA_CLEAN  = $(EXTENSION)--$(EXTVERSION).sql
 MODULE_big   = $(EXTENSION)
 OBJS         =  $(patsubst %.c,%.o,$(wildcard src/*.c))
 PG_CONFIG   ?= pg_config
@@ -35,7 +35,7 @@ PG_LIBS += -lrdkafka -lz -lpthread -lrt
 endif
 
 ifdef TEST
-REGRESS = $(TEST)
+REGRESS = 1_setup $(TEST)
 endif
 
 all: $(EXTENSION)--$(EXTVERSION).sql

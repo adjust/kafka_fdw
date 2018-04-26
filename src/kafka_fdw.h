@@ -83,7 +83,11 @@ enum ScanOpListIndex
     PartitionLow,
     PartitionHigh,
     OffsetLow,
-    OffsetHigh
+    OffsetHigh,
+    PartitionParamId,
+    OffsetParamId,
+    PartitionParamOP,
+    OffsetParamOP,
 };
 
 typedef struct KafkaScanParams
@@ -99,9 +103,22 @@ typedef struct KafkaScanOp
     int32 ph;          /* upper boundary of partition */
     int64 ol;          /* lower boundary of offset */
     int64 oh;          /* upper boundary of offset */
-    bool  oh_infinite; /* high watermark infinite*/
-    bool  ph_infinite;
+    bool  oh_infinite; /* offset high watermark infinite*/
+    bool  ph_infinite; /* partition high watermark infinite*/
+    List *p_params;    /* list of partition parameter for later evaluation*/
+    List *o_params;    /* list of offset parameter for later evaluation*/
+    List *p_param_ops; /* matching list of off kafka_op for partition parameter */
+    List *o_param_ops; /* matching list of off kafka_op for offset parameter */
 } KafkaScanOp;
+
+/* Parameter Evaluatio*/
+typedef struct KafkaParamValue
+{
+    int   paramid;
+    Oid   oid;
+    Datum value;
+    bool  is_null;
+} KafkaParamValue;
 
 typedef struct KafkaScanP
 {
@@ -159,6 +176,7 @@ typedef struct KafkaFdwPlanState
  */
 typedef struct KafkaFdwExecutionState
 {
+    bool                 initialized;
     KafkaOptions         kafka_options;      /* kafka optopns */
     ParseOptions         parse_options;      /* merged COPY options */
     rd_kafka_t *         kafka_handle;       /* connection to act on */
@@ -174,10 +192,14 @@ typedef struct KafkaFdwExecutionState
     Oid *                typioparams;        /* array of element types for in_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
     List *               scan_list;          /* list of KafkaScanP to scan */
+    List *               scanop_list;        /* list of KafkaScanOpP to scan */
+    List *               exec_exprs;         /* expressions to evaluate */
+    KafkaParamValue *    param_values;       /* param_value List matching exec_expr */
     KafKaPartitionList * partition_list;     /* list and count of partitions */
-    int32                current_part_num;   /* iterator of curently scanned partition of partition_list */
+    ListCell *           current_scan;       /* iterator of curently scanned partition of partition_list */
     StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
     char **              attnames;           /* pointer into attname_buf */
+    MemoryContext        state_cxt;          /* mem context form Begin Foreign Scan to allocate new stuff  */
 
 } KafkaFdwExecutionState;
 
@@ -212,11 +234,16 @@ void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
 
 /* kafka_expr.c */
-
-List *kafkaParseExpression(List *scan_list, Expr *expr, int partition_attnum, int offset_attnum, ListCell *start);
-List *KafkaFlattenScanlist(List *scan_list, KafKaPartitionList *partition_list, int64 batch_size);
+List *KafkaFlattenScanlist(List *              scan_list,
+                           KafKaPartitionList *partition_list,
+                           int64               batch_size,
+                           KafkaParamValue *   param_values,
+                           int                 num_params);
 List *KafkaScanOpToList(KafkaScanOp *scan_op);
 bool  kafka_valid_scanop_list(List *scan_op_list);
+List *dnfNorm(Expr *expr, int partition_attnum, int offset_attnum);
+List *applyKafkaScanOpList(List *a, List *b);
+List *parmaListToParmaId(List *input);
 
 KafkaScanOp *NewKafkaScanOp(void);
 
