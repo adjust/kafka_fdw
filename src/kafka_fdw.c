@@ -1,4 +1,5 @@
 #include "kafka_fdw.h"
+#include "executor/executor.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -6,6 +7,38 @@
 PG_MODULE_MAGIC;
 
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
+
+/* ExecEvalExpr accross different pg versions */
+#if PG_VERSION_NUM >= 100000
+#define KafkaExecEvalExpr(expr, econtext, isNull) (ExecEvalExpr(expr, econtext, isNull))
+#else
+#define KafkaExecEvalExpr(expr, econtext, isNull) (ExecEvalExpr(expr, econtext, isNull, NULL))
+#endif
+
+/* this is already defined in pg 10 */
+#if PG_VERSION_NUM < 100000
+List *ExecInitExprList(List *nodes, PlanState *parent);
+
+/*
+ * Call ExecInitExpr() on a list of expressions, return a list of ExprStates.
+ */
+List *
+ExecInitExprList(List *nodes, PlanState *parent)
+{
+    List *    result = NIL;
+    ListCell *lc;
+
+    foreach (lc, nodes)
+    {
+        Expr *e = lfirst(lc);
+
+        result = lappend(result, ExecInitExpr(e, parent));
+    }
+
+    return result;
+}
+
+#endif
 
 /*
  * FDW callback routines
@@ -33,9 +66,9 @@ static void            kafkaEndForeignScan(ForeignScanState *node);
  * Helper functions
  */
 
-static bool check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List **columns);
 static bool kafkaStop(KafkaFdwExecutionState *festate);
 static bool kafkaStart(KafkaFdwExecutionState *festate);
+static bool kafkaNext(KafkaFdwExecutionState *festate);
 
 static List *kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelation, int subplan_index);
 static void  kafkaBeginForeignModify(ModifyTableState *mtstate,
@@ -124,68 +157,9 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     KafkaFdwPlanState *fdw_private = (KafkaFdwPlanState *) baserel->fdw_private;
     Cost               startup_cost;
     Cost               total_cost;
-    List *             columns;
-    List *             options = NIL;
     Relation           relation;
-    List *             conditions = baserel->baserestrictinfo;
-    ListCell *         lc, *tail;
-    KafkaScanOp *      scann_op;
-    List *             scan_list, *scan_node_list;
-    KafkaOptions *     kafka_options = &fdw_private->kafka_options;
 
     relation = relation_open(foreigntableid, AccessShareLock);
-
-    /* parse filter conditions to scan kafka */
-
-    scann_op  = NewKafkaScanOp();
-    scan_list = list_make1(scann_op);
-    /*
-     * NOTE head and tail are equal here tail is used here
-     * to match implementation in kafkaParseExpression
-     * read as each outer ANDed condition must be applied to the
-     * whole scan_list
-     */
-    tail = list_tail(scan_list);
-    foreach (lc, conditions)
-    {
-        scan_list = kafkaParseExpression(scan_list,
-                                         ((RestrictInfo *) lfirst(lc))->clause,
-                                         kafka_options->partition_attnum,
-                                         kafka_options->offset_attnum,
-                                         tail);
-    }
-
-    /*
-     * convert the list to a list of list of const
-     * this is neede as the fdw_private list must be copiable by copyObject()
-     * see comment for ForeignScan node in plannodes.h
-     */
-    scan_node_list = NIL;
-
-    foreach (lc, scan_list)
-    {
-        scan_node_list = lappend(scan_node_list, KafkaScanOpToList((KafkaScanOp *) lfirst(lc)));
-
-        DEBUGLOG("part_low %d, part_high %d, offset_low %ld, offset_high %ld, phi: %d, ohi: %d",
-                 ((KafkaScanOp *) lfirst(lc))->pl,
-                 ((KafkaScanOp *) lfirst(lc))->ph,
-                 ((KafkaScanOp *) lfirst(lc))->ol,
-                 ((KafkaScanOp *) lfirst(lc))->oh,
-                 ((KafkaScanOp *) lfirst(lc))->ph_infinite,
-                 ((KafkaScanOp *) lfirst(lc))->oh_infinite);
-    }
-
-    /* we pass the kafka and parse options for scanning */
-    /* TODO kafka_options is not needed anymore */
-    options = list_make1(scan_node_list);
-
-    /* Decide whether to selectively perform binary conversion */
-    if (check_selective_binary_conversion(baserel, foreigntableid, &columns))
-#if PG_VERSION_NUM >= 100000
-        options = lappend(options, makeDefElem("convert_selectively", (Node *) columns, -1));
-#else
-        options = lappend(options, makeDefElem("convert_selectively", (Node *) columns));
-#endif
 
     /* Estimate costs */
     KafkaEstimateCosts(root, baserel, fdw_private, &startup_cost, &total_cost);
@@ -210,7 +184,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 #if PG_VERSION_NUM >= 90500
                                               NULL, /* no extra plan */
 #endif
-                                              options));
+                                              NIL));
 }
 
 /*
@@ -230,8 +204,13 @@ kafkaGetForeignPlan(PlannerInfo *root,
 #endif
 )
 {
-    Index scan_relid = baserel->relid;
+    ListCell *         lc;
+    List *             scan_list, *scan_node_list, *param_list;
+    KafkaFdwPlanState *fdw_private = (KafkaFdwPlanState *) baserel->fdw_private;
+    List *             options     = NIL;
+    Index              scan_relid  = baserel->relid;
 
+    KafkaOptions *kafka_options = &fdw_private->kafka_options;
     /*
      * We have no native ability to evaluate restriction clauses, so we just
      * put all the scan_clauses into the plan node's qual list for the
@@ -241,12 +220,57 @@ kafkaGetForeignPlan(PlannerInfo *root,
      */
     scan_clauses = extract_actual_clauses(scan_clauses, false);
 
+    /* parse filter conditions to scan kafka */
+    scan_list = NIL;
+    foreach (lc, scan_clauses)
+    {
+        scan_list = applyKafkaScanOpList(
+          scan_list, dnfNorm(lfirst(lc), kafka_options->partition_attnum, kafka_options->offset_attnum));
+        DEBUGLOG("scanlistlength GET PLAN %d", list_length(scan_list));
+    }
+    /* an empty list evaluates to true (scan default all) */
+    if (list_length(scan_list) == 0)
+    {
+        DEBUGLOG("got nothing usefull");
+        scan_list = lappend(scan_list, NewKafkaScanOp());
+    }
+
+    /*
+     * convert the list to a list of list of const
+     * this is neede as the fdw_private list must be copiable by copyObject()
+     * see comment for ForeignScan node in plannodes.h
+     */
+    scan_node_list = NIL;
+    param_list     = NIL;
+
+    foreach (lc, scan_list)
+    {
+        scan_node_list = lappend(scan_node_list, KafkaScanOpToList((KafkaScanOp *) lfirst(lc)));
+        param_list     = list_concat(param_list, (((KafkaScanOp *) lfirst(lc))->p_params));
+        param_list     = list_concat(param_list, (((KafkaScanOp *) lfirst(lc))->o_params));
+
+        DEBUGLOG("part_low %d, part_high %d, offset_low %ld, offset_high %ld, phi: %d, ohi: %d, part_param: %d, "
+                 "offset_param %d",
+                 ((KafkaScanOp *) lfirst(lc))->pl,
+                 ((KafkaScanOp *) lfirst(lc))->ph,
+                 ((KafkaScanOp *) lfirst(lc))->ol,
+                 ((KafkaScanOp *) lfirst(lc))->oh,
+                 ((KafkaScanOp *) lfirst(lc))->ph_infinite,
+                 ((KafkaScanOp *) lfirst(lc))->oh_infinite,
+                 list_length(((KafkaScanOp *) lfirst(lc))->p_params),
+                 list_length(((KafkaScanOp *) lfirst(lc))->o_params));
+    }
+
+    /* we pass the kafka and parse options for scanning */
+    /* TODO kafka_options is not needed anymore */
+    options = list_make1(scan_node_list);
+
     /* Create the ForeignScan node */
     return make_foreignscan(tlist,
                             scan_clauses,
                             scan_relid,
-                            NIL, /* no expressions to evaluate */
-                            best_path->fdw_private
+                            param_list, /* no expressions to evaluate */
+                            options
 #if PG_VERSION_NUM >= 90500
                             ,
                             NIL, /* no custom tlist */
@@ -293,22 +317,64 @@ static void
 kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
 
-    DEBUGLOG("%s", __func__);
     KafkaOptions kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ListCell *   lc;
     List *       scanop;
     List *       fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
     List *       scan_list   = (List *) list_nth(fdw_private, 0);
 
+    DEBUGLOG("%s", __func__);
+
     /* Fetch options --- we only need topic at this point */
     kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, NULL);
 
     ExplainPropertyText("Kafka topic", kafka_options.topic, es);
-    foreach (lc, scan_list)
+    if (es->analyze)
     {
-        scanop = (List *) lfirst(lc);
-        if (kafka_valid_scanop_list(scanop))
-            ExplainPropertyText("scanning", KafkaScanOpListToString(scanop), es);
+        ExprContext *           econtext = node->ss.ps.ps_ExprContext;
+        KafkaFdwExecutionState *festate  = (KafkaFdwExecutionState *) node->fdw_state;
+        MemoryContext           oldcontext;
+        ListCell *              lc_exp, *cell;
+        KafkaScanP *            p;
+        int                     i = 0;
+
+        oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+        foreach (lc_exp, festate->exec_exprs)
+        {
+            festate->param_values[i].value =
+              KafkaExecEvalExpr((ExprState *) lfirst(lc_exp), econtext, &festate->param_values[i].is_null);
+            i++;
+        }
+
+        MemoryContextSwitchTo(festate->state_cxt);
+
+        festate->scan_list = KafkaFlattenScanlist(
+          festate->scanop_list, festate->partition_list, kafka_options.batch_size, festate->param_values, i);
+        foreach (cell, festate->scan_list)
+        {
+            StringInfoData buf;
+            initStringInfo(&buf);
+            p = (KafkaScanP *) lfirst(cell);
+            DEBUGLOG("p %d, of %ld, ofl %ld", p->partition, p->offset, p->offset_lim);
+            appendStringInfo(&buf, "PARTITION %d AND OFFSET >= %ld", p->partition, p->offset);
+
+            if (p->offset_lim > 0)
+                appendStringInfo(&buf, " AND OFFSET <= %ld", p->offset_lim);
+
+            ExplainPropertyText("scanning", buf.data, es);
+        }
+
+        MemoryContextSwitchTo(oldcontext);
+    }
+    else
+    {
+        foreach (lc, scan_list)
+        {
+            scanop = (List *) lfirst(lc);
+            if (kafka_valid_scanop_list(scanop))
+                ExplainPropertyText("scanning", KafkaScanOpListToString(scanop), es);
+        }
     }
 }
 
@@ -319,9 +385,9 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 static void
 kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 {
-    // ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
+    ForeignScan *           plan          = (ForeignScan *) node->ss.ps.plan;
     KafkaOptions            kafka_options = { DEFAULT_KAFKA_OPTIONS };
-    ParseOptions            parse_options = {};
+    ParseOptions            parse_options = { .format = -1 };
     KafkaFdwExecutionState *festate;
     char                    errstr[KAFKA_MAX_ERR_MSG];
     TupleDesc               tupDesc;
@@ -354,8 +420,11 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     }
 
     /* setup execution state */
-    festate                   = (KafkaFdwExecutionState *) palloc0(sizeof(KafkaFdwExecutionState));
-    festate->current_part_num = 0;
+    festate               = (KafkaFdwExecutionState *) palloc0(sizeof(KafkaFdwExecutionState));
+    node->fdw_state       = (void *) festate;
+    festate->param_values = NULL;
+    festate->current_scan = NULL;
+    festate->state_cxt    = CurrentMemoryContext;
 
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
@@ -412,8 +481,6 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     festate->typioparams  = typioparams;
     festate->attnumlist   = attnums;
 
-    node->fdw_state = (void *) festate;
-
     /*
      * Init Kafka-related stuff
      */
@@ -437,10 +504,37 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
           ERROR,
           (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", kafka_options.topic)));
 
-    festate->scan_list = KafkaFlattenScanlist(scan_list, festate->partition_list, kafka_options.batch_size);
-    festate->buffer    = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
+    // festate->scan_list = KafkaFlattenScanlist(scan_list, festate->partition_list, kafka_options.batch_size);
+    festate->scan_list   = NIL;
+    festate->scanop_list = scan_list;
+    festate->buffer      = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
-    kafkaStart(festate);
+    /*
+     * Prepare parameters that need to be extracted from psql query.
+     */
+
+    if (list_length(plan->fdw_exprs) > 0)
+    {
+        ListCell *lc;
+        Param *   p;
+        int       i = 0;
+
+        festate->exec_exprs   = ExecInitExprList(plan->fdw_exprs, (PlanState *) node);
+        festate->param_values = palloc0(list_length(plan->fdw_exprs) * sizeof(KafkaParamValue));
+
+        foreach (lc, plan->fdw_exprs)
+        {
+            p                                = (Param *) lfirst(lc);
+            festate->param_values[i].paramid = p->paramid;
+            festate->param_values[i].oid     = p->paramtype;
+            i++;
+        }
+    }
+    else
+    {
+        festate->param_values = NULL;
+        festate->exec_exprs   = NIL;
+    }
 }
 
 /*
@@ -453,8 +547,9 @@ kafkaIterateForeignScan(ForeignScanState *node)
 {
     // DEBUGLOG("%s", __func__);
 
-    KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
-    TupleTableSlot *        slot    = node->ss.ss_ScanTupleSlot;
+    KafkaFdwExecutionState *festate  = (KafkaFdwExecutionState *) node->fdw_state;
+    ExprContext *           econtext = node->ss.ps.ps_ExprContext;
+    TupleTableSlot *        slot     = node->ss.ss_ScanTupleSlot;
     rd_kafka_message_t *    message;
     Datum *                 values;
     bool *                  nulls;
@@ -469,8 +564,33 @@ kafkaIterateForeignScan(ForeignScanState *node)
     MemoryContext           ccxt          = CurrentMemoryContext;
     int                     fldct;
     bool                    error = false;
-    List *                  scan_list;
     KafkaScanP *            scan_p;
+
+    /* eval expressions */
+    if (festate->current_scan == NULL)
+    {
+        MemoryContext oldcontext;
+        ListCell *    lc_exp;
+        int           i = 0;
+
+        oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+        foreach (lc_exp, festate->exec_exprs)
+        {
+            festate->param_values[i].value =
+              KafkaExecEvalExpr((ExprState *) lfirst(lc_exp), econtext, &festate->param_values[i].is_null);
+            i++;
+        }
+
+        MemoryContextSwitchTo(festate->state_cxt);
+
+        festate->scan_list = KafkaFlattenScanlist(
+          festate->scanop_list, festate->partition_list, kafka_options->batch_size, festate->param_values, i);
+
+        MemoryContextSwitchTo(oldcontext);
+        festate->current_scan = list_head(festate->scan_list);
+        kafkaStart(festate);
+    }
 
     if (kafka_options->junk_error_attnum != -1)
         resetStringInfo(&festate->junk_buf);
@@ -500,8 +620,8 @@ kafkaIterateForeignScan(ForeignScanState *node)
         if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
         {
             DEBUGLOG("kafka_fdw has reached the end of the queue 1");
-            kafkaStop(festate);
-            kafkaStart(festate);
+            if (!kafkaNext(festate))
+                return slot;
         }
         else if (message->err != RD_KAFKA_RESP_ERR_NO_ERROR)
         {
@@ -516,19 +636,17 @@ kafkaIterateForeignScan(ForeignScanState *node)
          * check that we did not run over requested offset
          */
 
-        scan_list = festate->scan_list;
-        if (scan_list != NIL)
-        { // list is done we're finished //
-            scan_p = (KafkaScanP *) linitial(scan_list);
-
+        if (festate->current_scan != NULL)
+        {
+            scan_p = (KafkaScanP *) lfirst(festate->current_scan);
+            // list is done we're finished //
             if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
             {
                 DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
-                kafkaStop(festate);
-                kafkaStart(festate);
+                if (!kafkaNext(festate))
+                    return slot;
             }
         }
-        /**/
     }
 
     /*
@@ -538,15 +656,13 @@ kafkaIterateForeignScan(ForeignScanState *node)
     while (festate->buffer_cursor >= festate->buffer_count)
     {
 
-        scan_list = festate->scan_list;
-
-        if (scan_list == NIL)
+        if (festate->current_scan == NULL)
         { /* list is done we're finished */
             DEBUGLOG("done scanning");
             return slot;
         }
 
-        scan_p = (KafkaScanP *) linitial(scan_list);
+        scan_p = (KafkaScanP *) lfirst(festate->current_scan);
 
         festate->buffer_count = rd_kafka_consume_batch(festate->kafka_topic_handle,
                                                        scan_p->partition,
@@ -554,7 +670,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
                                                        festate->buffer,
                                                        kafka_options->batch_size);
 
-        DEBUGLOG("scanned more data %zd", festate->buffer_count);
+        festate->buffer_cursor = 0;
 
         if (festate->buffer_count == -1)
             ereport(
@@ -562,21 +678,19 @@ kafkaIterateForeignScan(ForeignScanState *node)
               (errcode(ERRCODE_FDW_ERROR),
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
-        festate->buffer_cursor = 0;
-
         if (festate->buffer_count <= 0)
         {
-            kafkaStop(festate);
-            kafkaStart(festate);
+            if (!kafkaNext(festate))
+                return slot;
         }
         else
         {
             message = festate->buffer[festate->buffer_cursor];
             if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
             {
-                DEBUGLOG("kafka_fdw has reached the end of the queue2");
-                kafkaStop(festate);
-                kafkaStart(festate);
+                DEBUGLOG("kafka_fdw has reached the end of the queue 2");
+                if (!kafkaNext(festate))
+                    return slot;
             }
             else if (message->err != RD_KAFKA_RESP_ERR_NO_ERROR)
             {
@@ -781,121 +895,13 @@ kafkaEndForeignScan(ForeignScanState *node)
     pfree(festate->buffer);
 }
 
-/*
- * check_selective_binary_conversion
- *
- * Check to see if it's useful to convert only a subset of the topic's columns
- * to binary.  If so, construct a list of the column names to be converted,
- * return that at *columns, and return TRUE.  (Note that it's possible to
- * determine that no columns need be converted, for instance with a COUNT(*)
- * query.  So we can't use returning a NIL list to indicate failure.)
- */
 static bool
-check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List **columns)
+kafkaNext(KafkaFdwExecutionState *festate)
 {
-    ForeignTable *table;
-    ListCell *    lc;
-    Relation      rel;
-    TupleDesc     tupleDesc;
-    AttrNumber    attnum;
-    Bitmapset *   attrs_used   = NULL;
-    bool          has_wholerow = false;
-    int           numattrs;
-    int           i;
-
-    *columns = NIL; /* default result */
-
-    /*
-     * Check format of the topic.  If binary format, this is irrelevant.
-     */
-    table = GetForeignTable(foreigntableid);
-    foreach (lc, table->options)
-    {
-        DefElem *def = (DefElem *) lfirst(lc);
-
-        if (strcmp(def->defname, "format") == 0)
-        {
-            char *format = defGetString(def);
-
-            if (strcmp(format, "binary") == 0)
-                return false;
-            break;
-        }
-    }
-
-/* Collect all the attributes needed for joins or final output. */
-#if PG_VERSION_NUM >= 90600
-    pull_varattnos((Node *) baserel->reltarget->exprs, baserel->relid, &attrs_used);
-#else
-    pull_varattnos((Node *) baserel->reltargetlist, baserel->relid, &attrs_used);
-#endif
-
-    /* Add all the attributes used by restriction clauses. */
-    foreach (lc, baserel->baserestrictinfo)
-    {
-        RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
-
-        pull_varattnos((Node *) rinfo->clause, baserel->relid, &attrs_used);
-    }
-
-    /* Convert attribute numbers to column names. */
-    rel       = heap_open(foreigntableid, AccessShareLock);
-    tupleDesc = RelationGetDescr(rel);
-
-    while ((attnum = bms_first_member(attrs_used)) >= 0)
-    {
-        /* Adjust for system attributes. */
-        attnum += FirstLowInvalidHeapAttributeNumber;
-
-        if (attnum == 0)
-        {
-            has_wholerow = true;
-            break;
-        }
-
-        /* Ignore system attributes. */
-        if (attnum < 0)
-            continue;
-
-        /* Get user attributes. */
-        if (attnum > 0)
-        {
-            Form_pg_attribute attr    = tupleDesc->attrs[attnum - 1];
-            char *            attname = NameStr(attr->attname);
-
-            /* Skip dropped attributes (probably shouldn't see any here). */
-            if (attr->attisdropped)
-                continue;
-            *columns = lappend(*columns, makeString(pstrdup(attname)));
-        }
-    }
-
-    /* Count non-dropped user attributes while we have the tupdesc. */
-    numattrs = 0;
-    for (i = 0; i < tupleDesc->natts; i++)
-    {
-        Form_pg_attribute attr = tupleDesc->attrs[i];
-
-        if (attr->attisdropped)
-            continue;
-        numattrs++;
-    }
-
-    heap_close(rel, AccessShareLock);
-
-    /* If there's a whole-row reference, fail: we need all the columns. */
-    if (has_wholerow)
-    {
-        *columns = NIL;
+    if (!kafkaStop(festate))
         return false;
-    }
-
-    /* If all the user attributes are needed, fail. */
-    if (numattrs == list_length(*columns))
-    {
-        *columns = NIL;
+    if (!kafkaStart(festate))
         return false;
-    }
 
     return true;
 }
@@ -903,15 +909,15 @@ check_selective_binary_conversion(RelOptInfo *baserel, Oid foreigntableid, List 
 static bool
 kafkaStop(KafkaFdwExecutionState *festate)
 {
-    DEBUGLOG("%s", __func__);
 
     KafkaScanP *scan_p;
-    List *      scan_list = festate->scan_list;
 
-    if (scan_list == NIL)
+    DEBUGLOG("%s", __func__);
+
+    if (festate->current_scan == NULL)
         return false;
 
-    scan_p = (KafkaScanP *) linitial(scan_list);
+    scan_p = (KafkaScanP *) lfirst(festate->current_scan);
 
     if (rd_kafka_consume_stop(festate->kafka_topic_handle, scan_p->partition) == -1)
     {
@@ -932,22 +938,28 @@ kafkaStop(KafkaFdwExecutionState *festate)
         festate->buffer_cursor++;
     }
 
-    festate->scan_list = list_delete_first(festate->scan_list);
-    return true;
+    festate->current_scan = lnext(festate->current_scan);
+    if (festate->current_scan != NULL)
+        return true;
+    else
+        return false;
 }
 static bool
 kafkaStart(KafkaFdwExecutionState *festate)
 {
     rd_kafka_resp_err_t err;
-    int64_t             low, high = 0;
-    List *              scan_list = festate->scan_list;
-    festate->buffer_count         = 0;
-    festate->buffer_cursor        = 0;
+    KafkaScanP *        scan_p;
+    int64_t             low, high;
 
-    if (scan_list == NIL)
+    festate->buffer_count  = 0;
+    festate->buffer_cursor = 0;
+
+    DEBUGLOG("%s", __func__);
+
+    if (festate->current_scan == NULL)
         return false;
 
-    KafkaScanP *scan_p = (KafkaScanP *) linitial(scan_list);
+    scan_p = (KafkaScanP *) lfirst(festate->current_scan);
 
     err = rd_kafka_query_watermark_offsets(
       festate->kafka_handle, festate->kafka_options.topic, scan_p->partition, &low, &high, WARTERMARK_TIMEOUT);
@@ -1067,7 +1079,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     int                  n_params, num = 0;
     ListCell *           lc, *prev;
     KafkaOptions         kafka_options = { DEFAULT_KAFKA_OPTIONS };
-    ParseOptions         parse_options = {};
+    ParseOptions         parse_options = { .format = -1 };
     Relation             rel           = rinfo->ri_RelationDesc;
     char                 errstr[512]; /* librdkafka API error reporting buffer */
 

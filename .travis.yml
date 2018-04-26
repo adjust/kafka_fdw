@@ -49,6 +49,7 @@ matrix:
    allow_failures:
      - env: postgres=9.2
      - env: postgres=9.3
+     - env: postgres=9.4
 
    fast_finish: true
 

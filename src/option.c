@@ -177,7 +177,7 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
 
     /* Support external use for option sanity checking */
     if (parse_options == NULL)
-        parse_options = &(ParseOptions){};
+        parse_options = &(ParseOptions){ .format = -1 };
 
     /* Extract options from the statement node tree */
     foreach (option, options)
