@@ -90,13 +90,6 @@ enum ScanOpListIndex
     OffsetParamOP,
 };
 
-typedef struct KafkaScanParams
-{
-    enum kafka_op offset_op; /* current offset operator */
-    int32         partition;
-    int64         offset;
-} KafkaScanParams;
-
 typedef struct KafkaScanOp
 {
     int32 pl;          /* lower boundary of partition */
@@ -135,18 +128,17 @@ typedef struct KafKaPartitionList
 
 typedef struct KafkaOptions
 {
-    char *          brokers;
-    char *          topic;
-    int             batch_size;
-    int             buffer_delay;
-    int             offset_attnum;     /* attribute number for offset col */
-    int             partition_attnum;  /* attribute number for partition col */
-    int             junk_attnum;       /* attribute number for junk col */
-    int             junk_error_attnum; /* attribute number for junk_error col */
-    bool            strict;            /* force strict parsing */
-    bool            ignore_junk;       /* ignore junk data by setting it to null */
-    int             num_parse_col;     /* number of parsable columns */
-    KafkaScanParams scan_params;       /* the partition / offset tuple see above */
+    char *brokers;
+    char *topic;
+    int   batch_size;
+    int   buffer_delay;
+    int   offset_attnum;     /* attribute number for offset col */
+    int   partition_attnum;  /* attribute number for partition col */
+    int   junk_attnum;       /* attribute number for junk col */
+    int   junk_error_attnum; /* attribute number for junk_error col */
+    bool  strict;            /* force strict parsing */
+    bool  ignore_junk;       /* ignore junk data by setting it to null */
+    int   num_parse_col;     /* number of parsable columns */
 } KafkaOptions;
 
 typedef struct ParseOptions
@@ -176,7 +168,6 @@ typedef struct KafkaFdwPlanState
  */
 typedef struct KafkaFdwExecutionState
 {
-    bool                 initialized;
     KafkaOptions         kafka_options;      /* kafka optopns */
     ParseOptions         parse_options;      /* merged COPY options */
     rd_kafka_t *         kafka_handle;       /* connection to act on */

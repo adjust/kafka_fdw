@@ -3,18 +3,6 @@ language: c
 
 matrix:
    include:
-     - env: postgres=9.2
-       addons:
-            postgresql: 9.2
-       install:
-            - sudo apt-get install postgresql-server-dev-9.2
-            - sudo make install
-     - env: postgres=9.3
-       addons:
-            postgresql: 9.3
-       install:
-            - sudo apt-get install postgresql-server-dev-9.3
-            - sudo make install
      - env: postgres=9.4
        addons:
             postgresql: 9.4
@@ -47,8 +35,6 @@ matrix:
            - sudo make install
 
    allow_failures:
-     - env: postgres=9.2
-     - env: postgres=9.3
      - env: postgres=9.4
 
    fast_finish: true
