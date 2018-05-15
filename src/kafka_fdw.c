@@ -1,5 +1,5 @@
 #include "kafka_fdw.h"
-#include "executor/executor.h"
+#include "compatibility.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -8,54 +8,18 @@ PG_MODULE_MAGIC;
 
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
 
-/* ExecEvalExpr accross different pg versions */
-#if PG_VERSION_NUM >= 100000
-#define KafkaExecEvalExpr(expr, econtext, isNull) (ExecEvalExpr(expr, econtext, isNull))
-#else
-#define KafkaExecEvalExpr(expr, econtext, isNull) (ExecEvalExpr(expr, econtext, isNull, NULL))
-#endif
-
-/* this is already defined in pg 10 */
-#if PG_VERSION_NUM < 100000
-List *ExecInitExprList(List *nodes, PlanState *parent);
-
-/*
- * Call ExecInitExpr() on a list of expressions, return a list of ExprStates.
- */
-List *
-ExecInitExprList(List *nodes, PlanState *parent)
-{
-    List *    result = NIL;
-    ListCell *lc;
-
-    foreach (lc, nodes)
-    {
-        Expr *e = lfirst(lc);
-
-        result = lappend(result, ExecInitExpr(e, parent));
-    }
-
-    return result;
-}
-
-#endif
-
 /*
  * FDW callback routines
  */
-static void         kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
-static void         kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
-static ForeignScan *kafkaGetForeignPlan(PlannerInfo *root,
-                                        RelOptInfo * baserel,
-                                        Oid          foreigntableid,
-                                        ForeignPath *best_path,
-                                        List *       tlist,
-                                        List *       scan_clauses
-#if PG_VERSION_NUM >= 90500
-                                        ,
-                                        Plan *outer_plan
-#endif
-);
+static void            kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+static void            kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+static ForeignScan *   kafkaGetForeignPlan(PlannerInfo *root,
+                                           RelOptInfo * baserel,
+                                           Oid          foreigntableid,
+                                           ForeignPath *best_path,
+                                           List *       tlist,
+                                           List *       scan_clauses,
+                                           Plan *       outer_plan);
 static void            kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es);
 static void            kafkaBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *kafkaIterateForeignScan(ForeignScanState *node);
@@ -171,20 +135,16 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
      * it will be propagated into the fdw_private list of the Plan node.
      */
     add_path(baserel,
-             (Path *) create_foreignscan_path(root,
-                                              baserel,
-#if PG_VERSION_NUM >= 90600
-                                              NULL, /* default pathtarget */
-#endif
-                                              baserel->rows,
-                                              startup_cost,
-                                              total_cost,
-                                              NIL,  /* no pathkeys */
-                                              NULL, /* no outer rel either */
-#if PG_VERSION_NUM >= 90500
-                                              NULL, /* no extra plan */
-#endif
-                                              NIL));
+             (Path *) kafka_create_foreignscan_path(root,
+                                                    baserel,
+                                                    NULL, /* default pathtarget */
+                                                    baserel->rows,
+                                                    startup_cost,
+                                                    total_cost,
+                                                    NIL,  /* no pathkeys */
+                                                    NULL, /* no outer rel either */
+                                                    NULL, /* no extra plan */
+                                                    NIL));
 }
 
 /*
@@ -197,12 +157,8 @@ kafkaGetForeignPlan(PlannerInfo *root,
                     Oid          foreigntableid,
                     ForeignPath *best_path,
                     List *       tlist,
-                    List *       scan_clauses
-#if PG_VERSION_NUM >= 90500
-                    ,
-                    Plan *outer_plan
-#endif
-)
+                    List *       scan_clauses,
+                    Plan *       outer_plan)
 {
     ListCell *         lc;
     List *             scan_list, *scan_node_list, *param_list;
@@ -269,15 +225,11 @@ kafkaGetForeignPlan(PlannerInfo *root,
     return make_foreignscan(tlist,
                             scan_clauses,
                             scan_relid,
-                            param_list, /* no expressions to evaluate */
-                            options
-#if PG_VERSION_NUM >= 90500
-                            ,
+                            param_list,
+                            options,
                             NIL, /* no custom tlist */
                             NIL, /* no remote quals */
-                            outer_plan
-#endif
-    );
+                            outer_plan);
 }
 
 /* helper function to return a stringified version of scan params */
@@ -866,8 +818,8 @@ static void
 kafkaReScanForeignScan(ForeignScanState *node)
 {
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
-
     kafkaStop(festate);
+    festate->current_scan = list_head(festate->scan_list);
     kafkaStart(festate);
 }
 
@@ -1023,10 +975,9 @@ kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelatio
      */
     if (plan->returningLists)
         returningList = (List *) list_nth(plan->returningLists, subplan_index);
-#if PG_VERSION_NUM >= 90500
+
     if (plan->onConflictAction)
         elog(ERROR, "unexpected ON CONFLICT specification: %d", (int) plan->onConflictAction);
-#endif
 
     heap_close(rel, NoLock);
 
