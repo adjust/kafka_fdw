@@ -1,0 +1,64 @@
+\i test/sql/setup.inc
+\set ECHO none
+-- standard setup
+CREATE FOREIGN TABLE IF NOT EXISTS kafka_test_part (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    some_int int,
+    some_text text,
+    some_date date,
+    some_time timestamp
+)
+SERVER kafka_server OPTIONS
+    (format 'csv', topic 'contrib_regress4', batch_size '30', buffer_delay '100');
+NOTICE:  relation "kafka_test_part" already exists, skipping
+ALTER FOREIGN TABLE kafka_test_part OPTIONS(ADD num_partitions '4');
+set max_parallel_workers_per_gather=4;
+set max_parallel_workers=8;
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part ;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Gather
+   Workers Planned: 3
+   ->  Parallel Foreign Scan on kafka_test_part
+         Kafka topic: contrib_regress4
+         scanning: PARTITION >= 0 AND OFFSET >= 0
+(5 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
+                QUERY PLAN                
+------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((offs = 1) AND (part = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION = 0 AND OFFSET = 1
+(4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR (part = 4 and offs=7);
+                                          QUERY PLAN                                          
+----------------------------------------------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Foreign Scan on kafka_test_part
+         Filter: ((((part = 1) OR (part = 2)) AND (offs = 3)) OR ((part = 4) AND (offs = 7)))
+         Kafka topic: contrib_regress4
+         scanning: PARTITION = 1 AND OFFSET = 3
+         scanning: PARTITION = 2 AND OFFSET = 3
+         scanning: PARTITION = 4 AND OFFSET = 7
+(8 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR ((part = 4 and offs=7 ) or ( part = 5 and (offs = 10 or offs=12)) );
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Gather
+   Workers Planned: 4
+   ->  Parallel Foreign Scan on kafka_test_part
+         Filter: ((((part = 1) OR (part = 2)) AND (offs = 3)) OR ((part = 4) AND (offs = 7)) OR ((part = 5) AND ((offs = 10) OR (offs = 12))))
+         Kafka topic: contrib_regress4
+         scanning: PARTITION = 1 AND OFFSET = 3
+         scanning: PARTITION = 2 AND OFFSET = 3
+         scanning: PARTITION = 4 AND OFFSET = 7
+         scanning: PARTITION = 5 AND OFFSET = 10
+         scanning: PARTITION = 5 AND OFFSET = 12
+(10 rows)
+

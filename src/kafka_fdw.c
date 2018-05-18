@@ -1,6 +1,7 @@
 #include "kafka_fdw.h"
 #include "compatibility.h"
 #include "parser/parsetree.h"
+#include "storage/spin.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
@@ -51,6 +52,18 @@ static void kafkaEndForeignModify(EState *estate, ResultRelInfo *rinfo);
 static int kafkaIsForeignRelUpdatable(Relation rel);
 
 static char *getJsonAttname(Form_pg_attribute attr, StringInfo buff);
+static int   next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand);
+
+/* parallel execution */
+#ifdef DO_PARALLEL
+static bool kafkaIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte);
+static Size kafkaEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt);
+static void kafkaInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void kafkaReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate);
+static void kafkaInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate);
+static void kafkaShutdownForeignScan(ForeignScanState *node);
+static void kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
+#endif
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -70,8 +83,6 @@ Datum kafka_fdw_handler(PG_FUNCTION_ARGS)
     fdwroutine->ReScanForeignScan   = kafkaReScanForeignScan;
     fdwroutine->EndForeignScan      = kafkaEndForeignScan;
     fdwroutine->AnalyzeForeignTable = NULL; /* we don't analyze for now */
-    /* making it parallelsafe seems hard but doable left out for now */
-    // fdwroutine->IsForeignScanParallelSafe = topicIsForeignScanParallelSafe;
 
     fdwroutine->AddForeignUpdateTargets = NULL;
     fdwroutine->PlanForeignModify       = kafkaPlanForeignModify;
@@ -81,7 +92,14 @@ Datum kafka_fdw_handler(PG_FUNCTION_ARGS)
     fdwroutine->ExecForeignUpdate       = NULL;
     fdwroutine->ExecForeignDelete       = NULL;
     fdwroutine->IsForeignRelUpdatable   = kafkaIsForeignRelUpdatable;
-
+#ifdef DO_PARALLEL
+    fdwroutine->IsForeignScanParallelSafe   = kafkaIsForeignScanParallelSafe;
+    fdwroutine->EstimateDSMForeignScan      = kafkaEstimateDSMForeignScan;
+    fdwroutine->InitializeDSMForeignScan    = kafkaInitializeDSMForeignScan;
+    fdwroutine->ReInitializeDSMForeignScan  = kafkaReInitializeDSMForeignScan;
+    fdwroutine->InitializeWorkerForeignScan = kafkaInitializeWorkerForeignScan;
+    fdwroutine->ShutdownForeignScan         = kafkaShutdownForeignScan;
+#endif
     PG_RETURN_POINTER(fdwroutine);
 }
 
@@ -92,7 +110,6 @@ Datum kafka_fdw_handler(PG_FUNCTION_ARGS)
 static void
 kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 {
-
     KafkaFdwPlanState *fdw_private;
 
     /* Fetch options. */
@@ -119,14 +136,23 @@ static void
 kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 {
     KafkaFdwPlanState *fdw_private = (KafkaFdwPlanState *) baserel->fdw_private;
-    Cost               startup_cost;
-    Cost               total_cost;
+    Cost               startup_cost, total_cost, run_cost;
     Relation           relation;
+    ForeignPath *      foreign_path;
+    int                num_workers;
+
+    DEBUGLOG("%s", __func__);
+
+#ifdef DO_PARALLEL
+    num_workers = Min(fdw_private->npart - 1, max_parallel_workers_per_gather);
+#else
+    num_workers = 0;
+#endif
 
     relation = relation_open(foreigntableid, AccessShareLock);
 
     /* Estimate costs */
-    KafkaEstimateCosts(root, baserel, fdw_private, &startup_cost, &total_cost);
+    KafkaEstimateCosts(root, baserel, fdw_private, &startup_cost, &total_cost, &run_cost);
 
     relation_close(relation, AccessShareLock);
     /*
@@ -134,17 +160,27 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
      * fdw_private list of the path to carry the convert_selectively option;
      * it will be propagated into the fdw_private list of the Plan node.
      */
-    add_path(baserel,
-             (Path *) kafka_create_foreignscan_path(root,
-                                                    baserel,
-                                                    NULL, /* default pathtarget */
-                                                    baserel->rows,
-                                                    startup_cost,
-                                                    total_cost,
-                                                    NIL,  /* no pathkeys */
-                                                    NULL, /* no outer rel either */
-                                                    NULL, /* no extra plan */
-                                                    NIL));
+
+    foreign_path = kafka_create_foreignscan_path(root,
+                                                 baserel,
+                                                 NULL, /* default pathtarget */
+                                                 baserel->rows,
+                                                 startup_cost,
+                                                 total_cost,
+                                                 NIL,  /* no pathkeys */
+                                                 NULL, /* no outer rel either */
+                                                 NULL, /* no extra plan */
+                                                 NIL);
+#ifdef DO_PARALLEL
+    if (num_workers > 0)
+    {
+        KafkaSetParallelPath((Path *) foreign_path, num_workers, startup_cost, total_cost, run_cost);
+        add_partial_path(baserel, (Path *) foreign_path);
+        return;
+    }
+#endif
+
+    add_path(baserel, (Path *) foreign_path);
 }
 
 /*
@@ -162,11 +198,12 @@ kafkaGetForeignPlan(PlannerInfo *root,
 {
     ListCell *         lc;
     List *             scan_list, *scan_node_list, *param_list;
-    KafkaFdwPlanState *fdw_private = (KafkaFdwPlanState *) baserel->fdw_private;
-    List *             options     = NIL;
-    Index              scan_relid  = baserel->relid;
+    KafkaFdwPlanState *fdw_private   = (KafkaFdwPlanState *) baserel->fdw_private;
+    List *             options       = NIL;
+    Index              scan_relid    = baserel->relid;
+    KafkaOptions *     kafka_options = &fdw_private->kafka_options;
 
-    KafkaOptions *kafka_options = &fdw_private->kafka_options;
+    DEBUGLOG("%s", __func__);
     /*
      * We have no native ability to evaluate restriction clauses, so we just
      * put all the scan_clauses into the plan node's qual list for the
@@ -182,12 +219,10 @@ kafkaGetForeignPlan(PlannerInfo *root,
     {
         scan_list = applyKafkaScanOpList(
           scan_list, dnfNorm(lfirst(lc), kafka_options->partition_attnum, kafka_options->offset_attnum));
-        DEBUGLOG("scanlistlength GET PLAN %d", list_length(scan_list));
     }
     /* an empty list evaluates to true (scan default all) */
     if (list_length(scan_list) == 0)
     {
-        DEBUGLOG("got nothing usefull");
         scan_list = lappend(scan_list, NewKafkaScanOp());
     }
 
@@ -217,8 +252,7 @@ kafkaGetForeignPlan(PlannerInfo *root,
                  list_length(((KafkaScanOp *) lfirst(lc))->o_params));
     }
 
-    /* we pass the kafka and parse options for scanning */
-    /* TODO kafka_options is not needed anymore */
+    /* we pass the scan_node_list for scanning */
     options = list_make1(scan_node_list);
 
     /* Create the ForeignScan node */
@@ -269,11 +303,14 @@ static void
 kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
 
-    KafkaOptions kafka_options = { DEFAULT_KAFKA_OPTIONS };
-    ListCell *   lc;
-    List *       scanop;
-    List *       fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
-    List *       scan_list   = (List *) list_nth(fdw_private, 0);
+    ListCell *              lc;
+    List *                  scanop;
+    KafkaScanP *            p;
+    KafkaFdwExecutionState *festate;
+    int                     i             = 0;
+    KafkaOptions            kafka_options = { DEFAULT_KAFKA_OPTIONS };
+    List *                  fdw_private   = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
+    List *                  scan_list     = (List *) list_nth(fdw_private, 0);
 
     DEBUGLOG("%s", __func__);
 
@@ -283,41 +320,24 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
     ExplainPropertyText("Kafka topic", kafka_options.topic, es);
     if (es->analyze)
     {
-        ExprContext *           econtext = node->ss.ps.ps_ExprContext;
-        KafkaFdwExecutionState *festate  = (KafkaFdwExecutionState *) node->fdw_state;
-        MemoryContext           oldcontext;
-        ListCell *              lc_exp, *cell;
-        KafkaScanP *            p;
-        int                     i = 0;
-
-        oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
-
-        foreach (lc_exp, festate->exec_exprs)
+        festate = (KafkaFdwExecutionState *) node->fdw_state;
+        if (festate)
         {
-            festate->param_values[i].value =
-              KafkaExecEvalExpr((ExprState *) lfirst(lc_exp), econtext, &festate->param_values[i].is_null);
-            i++;
+            /* output the real work */
+            for (i = 0; i < festate->scan_data->len; i++)
+            {
+                StringInfoData buf;
+                initStringInfo(&buf);
+                p = &festate->scan_data->data[i];
+                DEBUGLOG("p %d, of %ld, ofl %ld", p->partition, p->offset, p->offset_lim);
+                appendStringInfo(&buf, "PARTITION %d AND OFFSET >= %ld", p->partition, p->offset);
+
+                if (p->offset_lim != -1)
+                    appendStringInfo(&buf, " AND OFFSET <= %ld", p->offset_lim);
+
+                ExplainPropertyText("scanning", buf.data, es);
+            }
         }
-
-        MemoryContextSwitchTo(festate->state_cxt);
-
-        festate->scan_list = KafkaFlattenScanlist(
-          festate->scanop_list, festate->partition_list, kafka_options.batch_size, festate->param_values, i);
-        foreach (cell, festate->scan_list)
-        {
-            StringInfoData buf;
-            initStringInfo(&buf);
-            p = (KafkaScanP *) lfirst(cell);
-            DEBUGLOG("p %d, of %ld, ofl %ld", p->partition, p->offset, p->offset_lim);
-            appendStringInfo(&buf, "PARTITION %d AND OFFSET >= %ld", p->partition, p->offset);
-
-            if (p->offset_lim > 0)
-                appendStringInfo(&buf, " AND OFFSET <= %ld", p->offset_lim);
-
-            ExplainPropertyText("scanning", buf.data, es);
-        }
-
-        MemoryContextSwitchTo(oldcontext);
     }
     else
     {
@@ -328,6 +348,19 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
                 ExplainPropertyText("scanning", KafkaScanOpListToString(scanop), es);
         }
     }
+}
+
+static KafkaScanPData *
+makeScanPData(void)
+{
+    KafkaScanPData *res;
+    res          = (KafkaScanPData *) palloc(sizeof(KafkaScanPData));
+    res->data    = (KafkaScanP *) palloc(sizeof(KafkaScanP));
+    res->len     = 0;
+    res->max_len = 1;
+    res->cursor  = 0;
+
+    return res;
 }
 
 /*
@@ -352,15 +385,14 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     List *                  attnums = NIL;
     List *                  fdw_private;
     List *                  scan_list;
+    // int                     nworkers, nworkers_launched;
 
     DEBUGLOG("%s", __func__);
 
     fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
+    scan_list   = (List *) list_nth(fdw_private, 0);
+
     kafkaGetOptions(RelationGetRelid(node->ss.ss_currentRelation), &kafka_options, &parse_options);
-
-    scan_list = (List *) list_nth(fdw_private, 0);
-
-    DEBUGLOG("scanlistlength %d", list_length(scan_list));
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
@@ -375,8 +407,12 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     festate               = (KafkaFdwExecutionState *) palloc0(sizeof(KafkaFdwExecutionState));
     node->fdw_state       = (void *) festate;
     festate->param_values = NULL;
-    festate->current_scan = NULL;
-    festate->state_cxt    = CurrentMemoryContext;
+    festate->scan_data    = makeScanPData();
+
+    /* we we get a parallel scan_data_desc will point to a shared mem segment by InitializeDSMForeignScan */
+    festate->scan_data_desc              = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
+    festate->scan_data_desc->next_scanp  = 0;
+    festate->scan_data_desc->is_parallel = false;
 
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
@@ -456,8 +492,6 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
           ERROR,
           (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", kafka_options.topic)));
 
-    // festate->scan_list = KafkaFlattenScanlist(scan_list, festate->partition_list, kafka_options.batch_size);
-    festate->scan_list   = NIL;
     festate->scanop_list = scan_list;
     festate->buffer      = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
@@ -514,33 +548,49 @@ kafkaIterateForeignScan(ForeignScanState *node)
     bool                    catched_error = false;
     bool                    ignore_junk   = kafka_options->ignore_junk;
     MemoryContext           ccxt          = CurrentMemoryContext;
-    int                     fldct;
-    bool                    error = false;
+    KafkaScanDataDesc *     scand         = festate->scan_data_desc;
+    bool                    error         = false;
+    int                     fldct, param_num = 0;
     KafkaScanP *            scan_p;
 
-    /* eval expressions */
-    if (festate->current_scan == NULL)
+    /* first run eval expressions and setup working list */
+    if (festate->scan_data->len == 0)
     {
-        MemoryContext oldcontext;
-        ListCell *    lc_exp;
-        int           i = 0;
+        DEBUGLOG("%s", __func__);
 
-        oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
-
-        foreach (lc_exp, festate->exec_exprs)
+        /*
+         * if we got parameters we evaluate them now
+         * we do so in the short lived per tuple context to avoid any leaking
+         */
+        if (list_length(festate->exec_exprs) > 0)
         {
-            festate->param_values[i].value =
-              KafkaExecEvalExpr((ExprState *) lfirst(lc_exp), econtext, &festate->param_values[i].is_null);
-            i++;
+            MemoryContext oldcontext;
+            ListCell *    lc_exp;
+            oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+            foreach (lc_exp, festate->exec_exprs)
+            {
+                festate->param_values[param_num].value =
+                  KafkaExecEvalExpr((ExprState *) lfirst(lc_exp), econtext, &festate->param_values[param_num].is_null);
+                param_num++;
+            }
+            MemoryContextSwitchTo(oldcontext);
         }
 
-        MemoryContextSwitchTo(festate->state_cxt);
+        KafkaFlattenScanlist(festate->scanop_list,
+                             festate->partition_list,
+                             kafka_options->batch_size,
+                             festate->param_values,
+                             param_num,
+                             festate->scan_data);
 
-        festate->scan_list = KafkaFlattenScanlist(
-          festate->scanop_list, festate->partition_list, kafka_options->batch_size, festate->param_values, i);
+        /*
+         * grap the next work item
+         * note in case of parallel scan this isn't nessecarely the first one
+         */
 
-        MemoryContextSwitchTo(oldcontext);
-        festate->current_scan = list_head(festate->scan_list);
+        festate->scan_data->cursor = next_work(festate->scan_data, scand);
+
         kafkaStart(festate);
     }
 
@@ -588,9 +638,9 @@ kafkaIterateForeignScan(ForeignScanState *node)
          * check that we did not run over requested offset
          */
 
-        if (festate->current_scan != NULL)
+        if (festate->scan_data->cursor >= 0)
         {
-            scan_p = (KafkaScanP *) lfirst(festate->current_scan);
+            scan_p = (KafkaScanP *) &festate->scan_data->data[festate->scan_data->cursor];
             // list is done we're finished //
             if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
             {
@@ -608,20 +658,21 @@ kafkaIterateForeignScan(ForeignScanState *node)
     while (festate->buffer_cursor >= festate->buffer_count)
     {
 
-        if (festate->current_scan == NULL)
+        if (festate->scan_data->cursor == -1)
         { /* list is done we're finished */
             DEBUGLOG("done scanning");
             return slot;
         }
 
-        scan_p = (KafkaScanP *) lfirst(festate->current_scan);
+        scan_p = &festate->scan_data->data[festate->scan_data->cursor];
 
+        DEBUGLOG("start consume");
         festate->buffer_count = rd_kafka_consume_batch(festate->kafka_topic_handle,
                                                        scan_p->partition,
                                                        kafka_options->buffer_delay,
                                                        festate->buffer,
                                                        kafka_options->batch_size);
-
+        DEBUGLOG("done consume %zd", festate->buffer_count);
         festate->buffer_cursor = 0;
 
         if (festate->buffer_count == -1)
@@ -630,7 +681,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
               (errcode(ERRCODE_FDW_ERROR),
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
-        if (festate->buffer_count <= 0)
+        if (festate->buffer_count <= 0) /* no more messages within timeout*/
         {
             if (!kafkaNext(festate))
                 return slot;
@@ -653,8 +704,6 @@ kafkaIterateForeignScan(ForeignScanState *node)
             }
         }
     }
-
-    // DEBUGLOG("kafka_fdw offset <%lld> list %d", message->offset, list_length(festate->scan_list));
 
     tupDesc   = RelationGetDescr(node->ss.ss_currentRelation);
     attr      = tupDesc->attrs;
@@ -819,7 +868,7 @@ kafkaReScanForeignScan(ForeignScanState *node)
 {
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
     kafkaStop(festate);
-    festate->current_scan = list_head(festate->scan_list);
+    festate->scan_data->cursor = 0;
     kafkaStart(festate);
 }
 
@@ -858,18 +907,40 @@ kafkaNext(KafkaFdwExecutionState *festate)
     return true;
 }
 
+static int
+next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand)
+{
+    int next;
+
+    if (scand == NULL)
+        return -1;
+#ifdef DO_PARALLEL
+    if (scand->is_parallel)
+        SpinLockAcquire(&scand->ps_mutex);
+#endif
+    next = scand->next_scanp++;
+#ifdef DO_PARALLEL
+    if (scand->is_parallel)
+        SpinLockRelease(&scand->ps_mutex);
+#endif
+    if (next >= scan_p->len)
+        return -1;
+
+    return next;
+}
+
 static bool
 kafkaStop(KafkaFdwExecutionState *festate)
 {
 
-    KafkaScanP *scan_p;
+    KafkaScanP *       scan_p;
+    KafkaScanDataDesc *scand = festate->scan_data_desc;
 
     DEBUGLOG("%s", __func__);
-
-    if (festate->current_scan == NULL)
+    if (festate->scan_data->cursor == -1)
         return false;
 
-    scan_p = (KafkaScanP *) lfirst(festate->current_scan);
+    scan_p = &festate->scan_data->data[festate->scan_data->cursor];
 
     if (rd_kafka_consume_stop(festate->kafka_topic_handle, scan_p->partition) == -1)
     {
@@ -890,8 +961,9 @@ kafkaStop(KafkaFdwExecutionState *festate)
         festate->buffer_cursor++;
     }
 
-    festate->current_scan = lnext(festate->current_scan);
-    if (festate->current_scan != NULL)
+    festate->scan_data->cursor = next_work(festate->scan_data, scand);
+
+    if (festate->scan_data->cursor >= 0)
         return true;
     else
         return false;
@@ -908,10 +980,10 @@ kafkaStart(KafkaFdwExecutionState *festate)
 
     DEBUGLOG("%s", __func__);
 
-    if (festate->current_scan == NULL)
+    if (festate->scan_data->cursor == -1)
         return false;
 
-    scan_p = (KafkaScanP *) lfirst(festate->current_scan);
+    scan_p = &festate->scan_data->data[festate->scan_data->cursor];
 
     err = rd_kafka_query_watermark_offsets(
       festate->kafka_handle, festate->kafka_options.topic, scan_p->partition, &low, &high, WARTERMARK_TIMEOUT);
@@ -1282,3 +1354,62 @@ getJsonAttname(Form_pg_attribute attr, StringInfo buff)
 
     return &buff->data[cur_start];
 }
+
+#ifdef DO_PARALLEL
+static bool
+kafkaIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+{
+    DEBUGLOG("%s", __func__);
+    return true;
+}
+
+static Size
+kafkaEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt)
+{
+    DEBUGLOG("%s", __func__);
+    return sizeof(KafkaScanDataDesc);
+}
+
+static void
+kafkaInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate)
+{
+    KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
+    KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
+    scand->ps_relid                 = RelationGetRelid(node->ss.ss_currentRelation);
+    scand->next_scanp               = 0;
+    SpinLockInit(&scand->ps_mutex);
+    festate->scan_data_desc = scand;
+}
+
+static void
+kafkaReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, void *coordinate)
+{
+    KafkaScanDataDesc *scand = (KafkaScanDataDesc *) coordinate;
+
+    /*
+     * It shouldn't be necessary to acquire the mutex here, but we do it
+     * anyway, just to be tidy.
+     */
+    SpinLockAcquire(&scand->ps_mutex);
+
+    scand->next_scanp = 0;
+
+    SpinLockRelease(&scand->ps_mutex);
+}
+
+static void
+kafkaInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coordinate)
+{
+    KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
+    KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
+    scand->is_parallel              = true;
+    festate->scan_data_desc         = scand;
+}
+
+static void
+kafkaShutdownForeignScan(ForeignScanState *node)
+{
+    KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
+    festate->scan_data_desc         = NULL;
+}
+#endif

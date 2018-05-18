@@ -1,4 +1,5 @@
 \i test/sql/setup.inc
+
 -- standard setup
 CREATE FOREIGN TABLE kafka_test_part (
     part int OPTIONS (partition 'true'),
@@ -8,7 +9,6 @@ CREATE FOREIGN TABLE kafka_test_part (
     some_date date,
     some_time timestamp
 )
-
 SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress4', batch_size '30', buffer_delay '100');
 
@@ -23,7 +23,6 @@ CREATE FOREIGN TABLE kafka_test_single_part (
 
 SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress', batch_size '30', buffer_delay '100');
-
 
 -- check that we parse the queries right or error out if needed
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
