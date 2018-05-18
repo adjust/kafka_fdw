@@ -1,3 +1,9 @@
+/*
+TODO consider and simplyfy
+SELECT * FROM kafka_test_part where (part between 1 and 2 and offs > 100) OR (part between 1 and 2 and offs > 200);
+SELECT * FROM kafka_test_part where (part between 3 and 2 and offs > 100) ;
+*/
+
 #include "kafka_fdw.h"
 
 #include "catalog/pg_operator.h"
@@ -27,7 +33,7 @@ enum low_high
     HIGH
 };
 
-static List *append_scan_p(List *list, KafkaScanP *scan_p, int64 batch_size);
+static void append_scan_p(KafkaScanPData *scand, KafkaScanP scan_p, int64 batch_size);
 
 static KafkaScanOp *applyOperator(OpExpr *oper, int partition_attnum, int offset_attnum);
 static KafkaScanOp *getKafkaScanOp(kafka_op op, scanfield field, Node *val_p);
@@ -253,6 +259,11 @@ get_offset(List *           param_id_list,
     return initial;
 }
 
+/*
+ * get the high/low partition number for given parameters and operatoer
+ *  param_id_list is an inter list of parameter ids (aka the column  number)
+ * param_op_list is the to be applied operater (typically > < =)
+ */
 static int32
 get_partition(List *           param_id_list,
               List *           param_op_list,
@@ -268,6 +279,11 @@ get_partition(List *           param_id_list,
     kafka_op  op;
     *isnull = false;
 
+    /*
+     * loop through both lists find column and operator and evaluate
+     * the parameter as needed
+     * given low_high we return min/max
+     */
     forboth(lc_id, param_id_list, lc_op, param_op_list)
     {
         id = lfirst_int(lc_id);
@@ -300,7 +316,7 @@ get_partition(List *           param_id_list,
 
                 if (val >= INT32_MAX)
                     ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("partition number out of range")));
-
+                /* if we are looking for the low water mark we need max otherwisee min*/
                 if (low_high == LOW)
                     initial = max_int64(initial, val);
                 else
@@ -318,23 +334,24 @@ get_partition(List *           param_id_list,
     we go through each element of that list and check if we need to expand
     and existing item in the result list or append to it
 */
-List *
+void
 KafkaFlattenScanlist(List *              scan_list,
                      KafKaPartitionList *partition_list,
                      int64               batch_size,
                      KafkaParamValue *   param_values,
-                     int                 num_params)
+                     int                 num_params,
+                     KafkaScanPData *    scanp_data)
 {
-    ListCell *  lc;
-    List *      scan_op_list;
-    KafkaScanP *scan_p;
-    List *      result = NIL;
-    int32       p      = 0;
-    int32       lowest_p, highest_p;
+    ListCell *lc;
+    List *    scan_op_list;
+    int32     p = 0;
+    int32     lowest_p, highest_p;
 
     qsort(partition_list->partitions, partition_list->partition_cnt, sizeof(int32), cmpfunc);
     lowest_p  = partition_list->partitions[0];
     highest_p = partition_list->partitions[partition_list->partition_cnt - 1];
+
+    DEBUGLOG("PARTITION LIST LOW %d, HIGH %d, LENGTH %d", lowest_p, highest_p, partition_list->partition_cnt);
 
     foreach (lc, scan_list)
     {
@@ -351,66 +368,88 @@ KafkaFlattenScanlist(List *              scan_list,
         oh          = ScanopListGetOh(scan_op_list);
         ph_infinite = ScanopListGetPhInvinite(scan_op_list);
         oh_infinite = ScanopListGetOhInvinite(scan_op_list);
+        ph          = ph_infinite ? highest_p : ph;
+        oh          = oh_infinite ? PG_INT64_MAX : oh;
 
-        pl = get_partition(list_nth(scan_op_list, PartitionParamId),
-                           list_nth(scan_op_list, PartitionParamOP),
-                           param_values,
-                           pl,
-                           num_params,
-                           LOW,
-                           &isnull);
-        if (isnull)
-            continue;
+        /* if we have any params evaluate them */
+        if (num_params > 0)
+        {
+            pl = get_partition(list_nth(scan_op_list, PartitionParamId),
+                               list_nth(scan_op_list, PartitionParamOP),
+                               param_values,
+                               pl,
+                               num_params,
+                               LOW,
+                               &isnull);
+            if (isnull)
+                continue;
 
-        ph = get_partition(list_nth(scan_op_list, PartitionParamId),
-                           list_nth(scan_op_list, PartitionParamOP),
-                           param_values,
-                           ph_infinite ? highest_p : ph,
-                           num_params,
-                           HIGH,
-                           &isnull);
-        if (isnull)
-            continue;
+            if (num_params > 0)
+                ph = get_partition(list_nth(scan_op_list, PartitionParamId),
+                                   list_nth(scan_op_list, PartitionParamOP),
+                                   param_values,
+                                   ph_infinite ? highest_p : ph,
+                                   num_params,
+                                   HIGH,
+                                   &isnull);
+            if (isnull)
+                continue;
 
-        ol = get_offset(list_nth(scan_op_list, OffsetParamId),
-                        list_nth(scan_op_list, OffsetParamOP),
-                        param_values,
-                        ol,
-                        num_params,
-                        LOW,
-                        &isnull);
+            ol = get_offset(list_nth(scan_op_list, OffsetParamId),
+                            list_nth(scan_op_list, OffsetParamOP),
+                            param_values,
+                            ol,
+                            num_params,
+                            LOW,
+                            &isnull);
 
-        if (isnull)
-            continue;
+            if (isnull)
+                continue;
 
-        oh = get_offset(list_nth(scan_op_list, OffsetParamId),
-                        list_nth(scan_op_list, OffsetParamOP),
-                        param_values,
-                        oh_infinite ? PG_INT64_MAX : oh,
-                        num_params,
-                        HIGH,
-                        &isnull);
+            oh = get_offset(list_nth(scan_op_list, OffsetParamId),
+                            list_nth(scan_op_list, OffsetParamOP),
+                            param_values,
+                            oh_infinite ? PG_INT64_MAX : oh,
+                            num_params,
+                            HIGH,
+                            &isnull);
 
-        if (isnull)
-            continue;
+            if (isnull)
+                continue;
+        }
 
+        /* if what we got makes any sense we create a KafkaScanP item per partition needed */
         if (pl <= ph && ol <= oh)
         {
             for (p = max_int32(pl, lowest_p); p <= ph; p++)
             {
                 if (partion_member(partition_list, p))
                 {
-                    scan_p             = palloc(sizeof(KafkaScanP));
-                    scan_p->partition  = p;
-                    scan_p->offset     = ol;
-                    scan_p->offset_lim = oh == PG_INT64_MAX ? -1 : oh;
-                    result             = append_scan_p(result, scan_p, batch_size);
+                    KafkaScanP scan_p = { .partition = p, .offset = ol, .offset_lim = (oh == PG_INT64_MAX ? -1 : oh) };
+                    append_scan_p(scanp_data, scan_p, batch_size);
                 }
             }
         }
     }
+}
 
-    return result;
+static void
+appendKafkaScanPData(KafkaScanPData *scanp_data, KafkaScanP scan_p)
+{
+    int newlen;
+    DEBUGLOG("%s ", __func__);
+
+    /* enlarge if needed */
+    if (scanp_data->len + 1 >= scanp_data->max_len)
+    {
+        newlen              = 2 * scanp_data->max_len;
+        scanp_data->data    = (KafkaScanP *) repalloc(scanp_data->data, sizeof(KafkaScanP) * newlen);
+        scanp_data->max_len = newlen;
+    }
+    scanp_data->data[scanp_data->len].partition  = scan_p.partition;
+    scanp_data->data[scanp_data->len].offset     = scan_p.offset;
+    scanp_data->data[scanp_data->len].offset_lim = scan_p.offset_lim;
+    ++scanp_data->len;
 }
 
 /*
@@ -418,36 +457,39 @@ KafkaFlattenScanlist(List *              scan_list,
  * either expands an existing element with scan_p in case of overlap
  * or appends scan_p to the list
  */
-static List *
-append_scan_p(List *list, KafkaScanP *scan_p, int64 batch_size)
+static void
+append_scan_p(KafkaScanPData *scanp_data, KafkaScanP scan_p, int64 batch_size)
 {
-    ListCell *  lc;
     KafkaScanP *cur_scan_p;
+    int         i = 0;
 
-    if (list == NIL)
-        return lappend(list, scan_p);
-
-    foreach (lc, list)
+    if (scanp_data->len == 0)
     {
-        cur_scan_p = (KafkaScanP *) lfirst(lc);
-        if (cur_scan_p->partition == scan_p->partition)
+        appendKafkaScanPData(scanp_data, scan_p);
+        return;
+    }
+
+    for (i = 0; i < scanp_data->len; i++)
+    {
+        cur_scan_p = &scanp_data->data[i];
+        if (cur_scan_p->partition == scan_p.partition)
         {
             // expand if overlap
             // [a, b] overlaps with [x, y] if a <= y and x <= b.
-            if ((cur_scan_p->offset <= scan_p->offset_lim + batch_size || scan_p->offset_lim == -1) &&
-                (scan_p->offset <= cur_scan_p->offset_lim + batch_size || cur_scan_p->offset_lim == -1))
+            if ((cur_scan_p->offset <= scan_p.offset_lim + batch_size || scan_p.offset_lim == -1) &&
+                (scan_p.offset <= cur_scan_p->offset_lim + batch_size || cur_scan_p->offset_lim == -1))
             {
-                cur_scan_p->offset     = min_int64(cur_scan_p->offset, scan_p->offset);
-                cur_scan_p->offset_lim = cur_scan_p->offset_lim == -1 || scan_p->offset_lim == -1
+                cur_scan_p->offset     = min_int64(cur_scan_p->offset, scan_p.offset);
+                cur_scan_p->offset_lim = cur_scan_p->offset_lim == -1 || scan_p.offset_lim == -1
                                            ? -1
-                                           : max_int64(cur_scan_p->offset_lim, scan_p->offset_lim);
-                return list;
+                                           : max_int64(cur_scan_p->offset_lim, scan_p.offset_lim);
+                return;
             }
         }
     }
 
     // we did not return in the expand case thus append
-    return lappend(list, scan_p);
+    appendKafkaScanPData(scanp_data, scan_p);
 }
 
 bool
@@ -732,12 +774,10 @@ applyKafkaScanOpList(List *a, List *b)
 
     if (a == NIL)
     {
-        DEBUGLOG("a NIL");
         return b;
     }
     if (b == NIL)
     {
-        DEBUGLOG("b NIL");
         return a;
     }
 

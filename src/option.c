@@ -30,6 +30,7 @@ static const struct KafkaFdwOption valid_options[] = {
     { "buffer_delay", ForeignTableRelationId },
     { "strict", ForeignTableRelationId },
     { "ignore_junk", ForeignTableRelationId },
+    { "num_partitions", ForeignTableRelationId },
 
     /* Format options */
     /* oids option is not supported */
@@ -367,6 +368,14 @@ KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
                 ereport(
                   ERROR,
                   (errcode(ERRCODE_SYNTAX_ERROR), errmsg("%s requires a non-negative integer value", def->defname)));
+        }
+        else if (strcmp(def->defname, "num_partitions") == 0)
+        {
+            kafka_options->num_partitions = strtol(defGetString(def), NULL, 10);
+            if (kafka_options->num_partitions <= 1)
+                ereport(
+                  ERROR,
+                  (errcode(ERRCODE_SYNTAX_ERROR), errmsg("%s requires an integer value bigger than 1", def->defname)));
         }
 
         else if (strcmp(def->defname, "batch_size") == 0)

@@ -2,7 +2,7 @@
 EXTENSION    = kafka_fdw
 EXTVERSION   = $(shell grep default_version $(EXTENSION).control | sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
 
-DATA 		 = $(wildcard *--*.sql)
+DATA 		 = $(filter-out $(EXTENSION)--$(EXTVERSION).sql, $(wildcard *--*.sql)) $(EXTENSION)--$(EXTVERSION).sql
 # DOCS         = $(wildcard doc/*.md)
 TESTS        = $(wildcard test/sql/*.sql)
 REGRESS      ?= $(patsubst test/sql/%.sql,%,$(TESTS))
@@ -24,6 +24,15 @@ endif
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
+ifeq ($(shell test $(VERSION_NUM) -lt 100000; echo $$?),0)
+REGRESS := $(filter-out parallel, $(REGRESS))
+endif
+
+ifeq ($(shell test $(VERSION_NUM) -ge 90600; echo $$?),0)
+PGOPTIONS+= "--max_parallel_workers_per_gather=0"
+endif
+
+
 PLATFORM 	 = $(shell uname -s)
 
 ifeq ($(PLATFORM),Darwin)
@@ -38,14 +47,16 @@ ifdef TEST
 REGRESS = $(TEST)
 endif
 
+
 all: $(EXTENSION)--$(EXTVERSION).sql
 
 $(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
 
+installcheck: submake $(REGRESS_PREP)
+	PGOPTIONS=$(PGOPTIONS) $(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 
 prep_kafka:
 	./test/init_kafka.sh
-
 
 .PHONY:	prep_kafka

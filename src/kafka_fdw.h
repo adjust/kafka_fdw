@@ -30,12 +30,17 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
-#define WARTERMARK_TIMEOUT 1000 /* timeout to query watermark */
+#define WARTERMARK_TIMEOUT 1000     /* timeout to query watermark */
+#define ESTIMATE_TUPLES 10000000000 /* current hard coded tuple estimate */
 
 #ifdef DO_DEBUG
 #define DEBUGLOG(...) elog(DEBUG1, __VA_ARGS__)
 #else
 #define DEBUGLOG(...)
+#endif
+
+#if PG_VERSION_NUM >= 100000
+#define DO_PARALLEL
 #endif
 
 #define KAFKA_MAX_ERR_MSG 200
@@ -46,7 +51,7 @@
 
 #define DEFAULT_KAFKA_OPTIONS                                                                                          \
     .batch_size = 1000, .buffer_delay = 100, .offset_attnum = -1, .partition_attnum = -1, .junk_attnum = -1,           \
-    .junk_error_attnum = -1, .strict = false, .num_parse_col = 0, .ignore_junk = false
+    .junk_error_attnum = -1, .strict = false, .num_parse_col = 0, .ignore_junk = false, .num_partitions = 10
 
 #define parsable_attnum(_attn, _kop)                                                                                   \
     (_attn != _kop.junk_attnum && _attn != _kop.junk_error_attnum && _attn != _kop.partition_attnum &&                 \
@@ -132,6 +137,7 @@ typedef struct KafkaOptions
     char *topic;
     int   batch_size;
     int   buffer_delay;
+    int   num_partitions;    /* number of partitions */
     int   offset_attnum;     /* attribute number for offset col */
     int   partition_attnum;  /* attribute number for partition col */
     int   junk_attnum;       /* attribute number for junk col */
@@ -152,6 +158,15 @@ typedef struct ParseOptions
     char *                escape;         /* CSV escape char (must be 1 byte) */
 } ParseOptions;
 
+/* scan koordination */
+typedef struct KafkaScanDataDesc
+{
+    Oid     ps_relid;   /* OID of relation to scan */
+    slock_t ps_mutex;   /* mutual exclusion for next_scanp */
+    int     next_scanp; /* next scanp to fetch */
+    bool    is_parallel;
+} KafkaScanDataDesc;
+
 /*
  * FDW-specific information for RelOptInfo.fdw_private.
  */
@@ -159,9 +174,19 @@ typedef struct KafkaFdwPlanState
 {
     KafkaOptions kafka_options; /* kafka optopns */
     ParseOptions parse_options; /* merged COPY options */
-    BlockNumber  pages;         /* estimate of topic's physical size */
-    double       ntuples;       /* estimate of number of rows in topic */
+    double       nbatches;      /* estimate of number of batches needed */
+    double       ntuples;       /* estimate of number of rows to scan */
+    int          npart;         /* estimate of number of partitions to scan */
 } KafkaFdwPlanState;
+
+/* holds information about extensible KafkaScanP list */
+typedef struct KafkaScanPData
+{
+    int         max_len; /* the allocated size as number of possible entries */
+    int         len;     /* is the current length */
+    int         cursor;  /* current work item */
+    KafkaScanP *data;    /* current buffer (allocated with palloc) */
+} KafkaScanPData;
 
 /*
  * FDW-specific information for ForeignScanState.fdw_state.
@@ -182,16 +207,14 @@ typedef struct KafkaFdwExecutionState
     FmgrInfo *           in_functions;       /* array of input functions for each attrs */
     Oid *                typioparams;        /* array of element types for in_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
-    List *               scan_list;          /* list of KafkaScanP to scan */
     List *               scanop_list;        /* list of KafkaScanOpP to scan */
     List *               exec_exprs;         /* expressions to evaluate */
     KafkaParamValue *    param_values;       /* param_value List matching exec_expr */
     KafKaPartitionList * partition_list;     /* list and count of partitions */
-    ListCell *           current_scan;       /* iterator of curently scanned partition of partition_list */
+    KafkaScanPData *     scan_data;          /* scan data list  */
     StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
     char **              attnames;           /* pointer into attname_buf */
-    MemoryContext        state_cxt;          /* mem context form Begin Foreign Scan to allocate new stuff  */
-
+    KafkaScanDataDesc *  scan_data_desc;     /* coordination point for parallel scans */
 } KafkaFdwExecutionState;
 
 /*
@@ -225,11 +248,12 @@ void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
 
 /* kafka_expr.c */
-List *KafkaFlattenScanlist(List *              scan_list,
+void  KafkaFlattenScanlist(List *              scan_list,
                            KafKaPartitionList *partition_list,
                            int64               batch_size,
                            KafkaParamValue *   param_values,
-                           int                 num_params);
+                           int                 num_params,
+                           KafkaScanPData *    scan_p);
 List *KafkaScanOpToList(KafkaScanOp *scan_op);
 bool  kafka_valid_scanop_list(List *scan_op_list);
 List *dnfNorm(Expr *expr, int partition_attnum, int offset_attnum);
@@ -252,6 +276,9 @@ void KafkaEstimateCosts(PlannerInfo *      root,
                         RelOptInfo *       baserel,
                         KafkaFdwPlanState *fdw_private,
                         Cost *             startup_cost,
-                        Cost *             total_cost);
-
+                        Cost *             total_cost,
+                        Cost *             run_cost);
+#ifdef DO_PARALLEL
+void KafkaSetParallelPath(Path *path, int num_workers, Cost startup_cost, Cost total_cost, Cost run_cost);
+#endif
 #endif
