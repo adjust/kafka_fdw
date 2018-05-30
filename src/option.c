@@ -195,6 +195,8 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
             }
             else if (strcmp(fmt, "json") == 0)
                 parse_options->format = JSON;
+            else if (strcmp(fmt, "raw") == 0)
+                parse_options->format = RAW;
             else
                 ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("format \"%s\" not recognized", fmt)));
         }

@@ -52,10 +52,15 @@ static void datum_to_json(Datum            val,
                           bool             key_scalar);
 static void add_json(Datum val, bool is_null, StringInfo result, Oid val_type, bool key_scalar);
 static void composite_to_json(Datum composite, StringInfo result, bool use_line_feeds);
+
 static int  KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
+static void KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+
 static int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
 static void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot);
-static void KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot);
+
+static int  KafkaReadAttributesRAW(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
+static void KafkaWriteAttributesRAW(KafkaFdwModifyState *festate, TupleTableSlot *slot);
 
 /*
  * Parse the char into separate attributes (fields)
@@ -68,10 +73,13 @@ KafkaReadAttributes(char *                  msg,
                     enum kafka_msg_format   format,
                     bool *                  unterminated_error)
 {
-    if (format == CSV)
-        return KafkaReadAttributesCSV(msg, msg_len, festate, unterminated_error);
-    else if (format == JSON)
-        return KafkaReadAttributesJson(msg, msg_len, festate, unterminated_error);
+    switch (format)
+    {
+        case CSV: return KafkaReadAttributesCSV(msg, msg_len, festate, unterminated_error);
+        case JSON: return KafkaReadAttributesJson(msg, msg_len, festate, unterminated_error);
+        case RAW: return KafkaReadAttributesRAW(msg, msg_len, festate, unterminated_error);
+        default: return -1;
+    }
 
     return -1;
 }
@@ -79,10 +87,13 @@ KafkaReadAttributes(char *                  msg,
 void
 KafkaWriteAttributes(KafkaFdwModifyState *festate, TupleTableSlot *slot, enum kafka_msg_format format)
 {
-    if (format == CSV)
-        KafkaWriteAttributesCSV(festate, slot);
-    else if (format == JSON)
-        KafkaWriteAttributesJson(festate, slot);
+    switch (format)
+    {
+        case CSV: return KafkaWriteAttributesCSV(festate, slot);
+        case JSON: return KafkaWriteAttributesJson(festate, slot);
+        case RAW: return KafkaWriteAttributesRAW(festate, slot);
+        default: return;
+    }
 }
 
 /*
@@ -999,6 +1010,50 @@ KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot)
     }
 
     appendStringInfoCharMacro(result, '}');
+}
+
+static int
+KafkaReadAttributesRAW(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error)
+{
+    /* Make sure there is enough space for the next value */
+    if (festate->max_fields < 1)
+    {
+        festate->max_fields = 1;
+        festate->raw_fields = repalloc(festate->raw_fields, festate->max_fields * sizeof(char *));
+    }
+    festate->raw_fields[0] = msg;
+    return 1;
+}
+
+static void
+KafkaWriteAttributesRAW(KafkaFdwModifyState *festate, TupleTableSlot *slot)
+{
+    ListCell *lc;
+
+    char *null_print     = festate->parse_options.null_print;
+    int   null_print_len = festate->parse_options.null_print_len;
+    int   pindex         = 0;
+
+    DEBUGLOG("%s", __func__);
+
+    foreach (lc, festate->attnumlist)
+    {
+        int         attnum = lfirst_int(lc);
+        bool        isnull;
+        const char *val;
+        Datum       value = slot_getattr(slot, attnum, &isnull);
+        if (isnull)
+        {
+            if (null_print)
+                appendBinaryStringInfo(&festate->attribute_buf, null_print, null_print_len);
+        }
+        else
+        {
+            val = OutputFunctionCall(&festate->out_functions[pindex], value);
+            appendBinaryStringInfo(&festate->attribute_buf, val, strlen(val));
+        }
+        pindex++;
+    }
 }
 /*
 

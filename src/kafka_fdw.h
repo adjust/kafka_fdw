@@ -68,7 +68,8 @@ enum kafka_msg_format
 {
     INVALID = -1,
     JSON,
-    CSV
+    CSV,
+    RAW
 };
 
 typedef enum kafka_op
