@@ -1,9 +1,11 @@
 #include "kafka_fdw.h"
 #include "compatibility.h"
+#include "funcapi.h"
 #include "parser/parsetree.h"
 #include "storage/spin.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/typcache.h"
 
 PG_MODULE_MAGIC;
 
@@ -440,6 +442,11 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
         initStringInfo(&festate->attname_buf);
         festate->attnames = palloc0(num_phys_attrs * sizeof(char *));
     }
+    if (parse_options.format == CUSTOM)
+    {
+        festate->decode =
+          (custom_decoder) load_external_function(parse_options.decode_lib, parse_options.decode_func, true, NULL);
+    }
 
     /*
      * Pick up the required catalog information for each attribute in the
@@ -716,138 +723,162 @@ kafkaIterateForeignScan(ForeignScanState *node)
 
     // DEBUGLOG("message: %s", message->payload);
 
-    fldct = KafkaReadAttributes(message->payload, message->len, festate, parse_options->format, &error);
-
-    /* unterminated quote, total junk */
-    if (error && parse_options->format == CSV)
+    if (parse_options->format != CUSTOM)
     {
-        if (kafka_options->strict)
-            ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
-        else
+        fldct = KafkaReadAttributes(message->payload, message->len, festate, parse_options->format, &error);
+
+        /* unterminated quote, total junk */
+        if (error && parse_options->format == CSV)
+        {
+            if (kafka_options->strict)
+                ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
+            else
+            {
+                catched_error = true;
+                if (kafka_options->junk_error_attnum != -1)
+                    appendStringInfoString(&festate->junk_buf, "unterminated CSV quoted field");
+                MemSet(nulls, true, num_attrs);
+            }
+        }
+        else if (error && parse_options->format == JSON)
         {
             catched_error = true;
-            if (kafka_options->junk_error_attnum != -1)
-                appendStringInfoString(&festate->junk_buf, "unterminated CSV quoted field");
             MemSet(nulls, true, num_attrs);
         }
-    }
-    else if (error && parse_options->format == JSON)
-    {
-        catched_error = true;
-        MemSet(nulls, true, num_attrs);
-    }
-    /* to much data */
-    else if (fldct > kafka_options->num_parse_col)
-    {
-        if (kafka_options->strict)
-            ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("extra data after last expected column")));
-
-        if (ignore_junk)
+        /* to much data */
+        else if (fldct > kafka_options->num_parse_col)
         {
-            catched_error = true;
-            if (kafka_options->junk_error_attnum != -1)
-                appendStringInfoString(&festate->junk_buf, "extra data after last expected column");
+            if (kafka_options->strict)
+                ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("extra data after last expected column")));
+
+            if (ignore_junk)
+            {
+                catched_error = true;
+                if (kafka_options->junk_error_attnum != -1)
+                    appendStringInfoString(&festate->junk_buf, "extra data after last expected column");
+            }
+        }
+        /* to less data*/
+        else if (fldct < kafka_options->num_parse_col)
+        {
+            if (kafka_options->strict)
+                ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("missing data in Kafka Stream")));
+
+            if (ignore_junk)
+            {
+                catched_error = true;
+                if (kafka_options->junk_error_attnum != -1)
+                    appendStringInfoString(&festate->junk_buf, "missing data in Kafka Stream");
+            }
         }
     }
-    /* to less data*/
-    else if (fldct < kafka_options->num_parse_col)
-    {
-        if (kafka_options->strict)
-            ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("missing data in Kafka Stream")));
 
-        if (ignore_junk)
-        {
-            catched_error = true;
-            if (kafka_options->junk_error_attnum != -1)
-                appendStringInfoString(&festate->junk_buf, "missing data in Kafka Stream");
-        }
+    if (parse_options->format == CUSTOM)
+    {
+        festate->decode(message->payload,
+                        message->len,
+                        values,
+                        nulls,
+                        num_attrs,
+                        kafka_options->partition_attnum - 1,
+                        kafka_options->offset_attnum - 1);
+
+        values[kafka_options->partition_attnum - 1] = Int32GetDatum(message->partition);
+        nulls[kafka_options->partition_attnum - 1]  = false;
+        values[kafka_options->offset_attnum - 1]    = Int64GetDatum(message->offset);
+        nulls[kafka_options->offset_attnum - 1]     = false;
     }
 
     /* Loop to read the user attributes on the line. */
-    fldnum = 0;
-    foreach (cur, festate->attnumlist)
+    if (parse_options->format != CUSTOM)
     {
-        int   attnum = lfirst_int(cur);
-        int   m      = attnum - 1;
-        char *string;
+        fldnum = 0;
+        foreach (cur, festate->attnumlist)
+        {
+            int   attnum = lfirst_int(cur);
+            int   m      = attnum - 1;
+            char *string;
 
-        if (attnum == kafka_options->junk_attnum || attnum == kafka_options->junk_error_attnum)
-        {
-            nulls[m] = true;
-            continue;
-        }
-
-        if (attnum == kafka_options->partition_attnum)
-        {
-            values[m] = Int32GetDatum(message->partition);
-            nulls[m]  = false;
-            continue;
-        }
-        if (attnum == kafka_options->offset_attnum)
-        {
-            values[m] = Int64GetDatum(message->offset);
-            nulls[m]  = false;
-            continue;
-        }
-        if (fldnum >= fldct)
-        {
-            nulls[m] = true;
-            continue;
-        }
-        string = festate->raw_fields[fldnum++];
-
-        if (string == NULL)
-        {
-            nulls[m] = true;
-            continue;
-        }
-        if (ignore_junk)
-        {
-            PG_TRY();
+            if (attnum == kafka_options->junk_attnum || attnum == kafka_options->junk_error_attnum)
             {
-                values[m] =
-                  InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
-                nulls[m] = false;
+                nulls[m] = true;
+                continue;
             }
-            PG_CATCH();
+
+            if (attnum == kafka_options->partition_attnum)
             {
-                values[m]     = (Datum) 0;
-                nulls[m]      = true;
-                catched_error = true;
+                values[m] = Int32GetDatum(message->partition);
+                nulls[m]  = false;
+                continue;
+            }
+            if (attnum == kafka_options->offset_attnum)
+            {
+                values[m] = Int64GetDatum(message->offset);
+                nulls[m]  = false;
+                continue;
+            }
 
-                MemoryContextSwitchTo(ccxt);
+            if (fldnum >= fldct)
+            {
+                nulls[m] = true;
+                continue;
+            }
+            string = festate->raw_fields[fldnum++];
 
-                /* accumulate errors if needed */
-                if (kafka_options->junk_error_attnum != -1)
+            if (string == NULL)
+            {
+                nulls[m] = true;
+                continue;
+            }
+            if (ignore_junk)
+            {
+                PG_TRY();
                 {
-                    ErrorData *errdata = CopyErrorData();
-
-                    if (festate->junk_buf.len > 0)
-                        appendStringInfoCharMacro(&festate->junk_buf, '\n');
-
-                    appendStringInfoString(&festate->junk_buf, errdata->message);
+                    values[m] =
+                      InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
+                    nulls[m] = false;
                 }
-                FlushErrorState();
+                PG_CATCH();
+                {
+                    values[m]     = (Datum) 0;
+                    nulls[m]      = true;
+                    catched_error = true;
+
+                    MemoryContextSwitchTo(ccxt);
+
+                    /* accumulate errors if needed */
+                    if (kafka_options->junk_error_attnum != -1)
+                    {
+                        ErrorData *errdata = CopyErrorData();
+
+                        if (festate->junk_buf.len > 0)
+                            appendStringInfoCharMacro(&festate->junk_buf, '\n');
+
+                        appendStringInfoString(&festate->junk_buf, errdata->message);
+                    }
+                    FlushErrorState();
+                }
+                PG_END_TRY();
+                continue;
             }
-            PG_END_TRY();
-            continue;
+
+            values[m] =
+              InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
+            nulls[m] = false;
         }
 
-        values[m] = InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
-        nulls[m]  = false;
-    }
-
-    if (catched_error)
-    {
-        if (kafka_options->junk_attnum != -1)
+        if (catched_error)
         {
-            values[kafka_options->junk_attnum - 1] = PointerGetDatum(cstring_to_text(message->payload));
-            nulls[kafka_options->junk_attnum - 1]  = false;
-        }
-        if (kafka_options->junk_error_attnum != -1)
-        {
-            values[kafka_options->junk_error_attnum - 1] = PointerGetDatum(cstring_to_text(festate->junk_buf.data));
-            nulls[kafka_options->junk_error_attnum - 1]  = false;
+            if (kafka_options->junk_attnum != -1)
+            {
+                values[kafka_options->junk_attnum - 1] = PointerGetDatum(cstring_to_text(message->payload));
+                nulls[kafka_options->junk_attnum - 1]  = false;
+            }
+            if (kafka_options->junk_error_attnum != -1)
+            {
+                values[kafka_options->junk_error_attnum - 1] = PointerGetDatum(cstring_to_text(festate->junk_buf.data));
+                nulls[kafka_options->junk_error_attnum - 1]  = false;
+            }
         }
     }
 

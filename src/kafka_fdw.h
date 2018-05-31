@@ -69,7 +69,8 @@ enum kafka_msg_format
     INVALID = -1,
     JSON,
     CSV,
-    RAW
+    RAW,
+    CUSTOM
 };
 
 typedef enum kafka_op
@@ -157,6 +158,8 @@ typedef struct ParseOptions
     char *                delim;          /* column delimiter (must be 1 byte) */
     char *                quote;          /* CSV quote char (must be 1 byte) */
     char *                escape;         /* CSV escape char (must be 1 byte) */
+    char *                decode_lib;     /* dynamic library for custom decoding */
+    char *                decode_func;    /* custom decoding function in dynamic lib*/
 } ParseOptions;
 
 /* scan koordination */
@@ -181,6 +184,14 @@ typedef struct KafkaFdwPlanState
     double       ntuples;       /* estimate of number of rows to scan */
     int          npart;         /* estimate of number of partitions to scan */
 } KafkaFdwPlanState;
+
+typedef void (*custom_decoder)(char * msg,
+                               size_t msg_len,
+                               Datum *values,
+                               bool * nulls,
+                               int    num_attr,
+                               int    part_attnum,
+                               int    offset_attnum);
 
 /* holds information about extensible KafkaScanP list */
 typedef struct KafkaScanPData
@@ -218,6 +229,7 @@ typedef struct KafkaFdwExecutionState
     StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
     char **              attnames;           /* pointer into attname_buf */
     KafkaScanDataDesc *  scan_data_desc;     /* coordination point for parallel scans */
+    custom_decoder       decode;             /* custom decode function */
 } KafkaFdwExecutionState;
 
 /*

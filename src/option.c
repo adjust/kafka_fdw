@@ -40,6 +40,9 @@ static const struct KafkaFdwOption valid_options[] = {
     { "escape", ForeignTableRelationId },
     { "null", ForeignTableRelationId },
     { "encoding", ForeignTableRelationId },
+    { "decode_lib", ForeignTableRelationId },
+    { "decode_func", ForeignTableRelationId },
+
     { "force_not_null", AttributeRelationId },
     { "force_null", AttributeRelationId },
     { "offset", AttributeRelationId },
@@ -47,6 +50,7 @@ static const struct KafkaFdwOption valid_options[] = {
     { "junk", AttributeRelationId },
     { "junk_error", AttributeRelationId },
     { "json", AttributeRelationId },
+
     /*
      * force_quote is not supported by kafka_fdw because it's for COPY TO for now.
      */
@@ -197,8 +201,24 @@ KafkaProcessParseOptions(ParseOptions *parse_options, List *options)
                 parse_options->format = JSON;
             else if (strcmp(fmt, "raw") == 0)
                 parse_options->format = RAW;
+            else if (strcmp(fmt, "custom") == 0)
+                parse_options->format = CUSTOM;
             else
                 ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("format \"%s\" not recognized", fmt)));
+        }
+        else if (strcmp(defel->defname, "decode_lib") == 0)
+        {
+            if (parse_options->decode_lib)
+                ereport(ERROR,
+                        (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options %s", defel->defname)));
+            parse_options->decode_lib = defGetString(defel);
+        }
+        else if (strcmp(defel->defname, "decode_func") == 0)
+        {
+            if (parse_options->decode_func)
+                ereport(ERROR,
+                        (errcode(ERRCODE_SYNTAX_ERROR), errmsg("conflicting or redundant options %s", defel->defname)));
+            parse_options->decode_func = defGetString(defel);
         }
         else if (strcmp(defel->defname, "delimiter") == 0)
         {
