@@ -1028,7 +1028,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     Oid                  typefnoid;
     bool                 isvarlena;
     int                  n_params, num = 0;
-    ListCell *           lc, *prev;
+    ListCell *           lc, *prev, *next;
     KafkaOptions         kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ParseOptions         parse_options = { .format = -1 };
     Relation             rel           = rinfo->ri_RelationDesc;
@@ -1066,10 +1066,11 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     initStringInfo(&festate->attribute_buf);
 
     prev = NULL;
-
-    foreach (lc, festate->attnumlist)
+    for (lc = list_head(festate->attnumlist); lc; lc = next)
     {
         int attnum = lfirst_int(lc);
+        next       = lnext(lc);
+
         if (!parsable_attnum(attnum, kafka_options))
         {
             festate->attnumlist = list_delete_cell(festate->attnumlist, lc, prev);
