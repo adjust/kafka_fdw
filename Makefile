@@ -35,7 +35,7 @@ PG_LIBS += -lrdkafka -lz -lpthread -lrt
 endif
 
 ifdef TEST
-REGRESS = 1_setup $(TEST)
+REGRESS = $(TEST)
 endif
 
 all: $(EXTENSION)--$(EXTVERSION).sql

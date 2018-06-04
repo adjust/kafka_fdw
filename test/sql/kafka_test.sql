@@ -1,3 +1,4 @@
+\i test/sql/setup.inc
 -- standard setup
 CREATE FOREIGN TABLE kafka_test_part (
     part int OPTIONS (partition 'true'),

@@ -1,3 +1,5 @@
+\i test/sql/setup.inc
+\set ECHO none
 show datestyle;
    DateStyle   
 ---------------
