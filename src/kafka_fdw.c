@@ -1028,7 +1028,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     Oid                  typefnoid;
     bool                 isvarlena;
     int                  n_params, num = 0;
-    ListCell *           lc, *prev;
+    ListCell *           lc, *prev, *del, *delprev;
     KafkaOptions         kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ParseOptions         parse_options = { .format = -1 };
     Relation             rel           = rinfo->ri_RelationDesc;
@@ -1066,13 +1066,27 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     initStringInfo(&festate->attribute_buf);
 
     prev = NULL;
+    del  = NULL;
+    delprev = NULL;
 
     foreach (lc, festate->attnumlist)
     {
+        if (del)
+        {
+             festate->attnumlist = list_delete_cell(festate->attnumlist, del, delprev);
+             del  = NULL;
+             delprev = NULL;
+        }
+           
         int attnum = lfirst_int(lc);
+
+        /* For Kafka internal columns we cannot delete in the loop because that causes issues.
+         * Therefore we mark for deletion on next loop cycle.
+         */
         if (!parsable_attnum(attnum, kafka_options))
         {
-            festate->attnumlist = list_delete_cell(festate->attnumlist, lc, prev);
+             del = lc;
+             delprev = prev;
         }
         else
         {
@@ -1093,6 +1107,16 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
             num++;
             prev = lc;
         }
+    }
+
+    /* If internal column is at the end, this may still require deletion after.
+     * So we will do that here.
+     */
+    if (del)
+    {
+         festate->attnumlist = list_delete_cell(festate->attnumlist, del, delprev);
+         del  = NULL;
+         delprev = NULL;
     }
 
     conf = rd_kafka_conf_new();
