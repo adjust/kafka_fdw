@@ -1071,7 +1071,8 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 
     foreach (lc, festate->attnumlist)
     {
-        if (del){
+        if (del)
+        {
              festate->attnumlist = list_delete_cell(festate->attnumlist, del, delprev);
              del  = NULL;
              delprev = NULL;
@@ -1111,7 +1112,8 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     /* If internal column is at the end, this may still require deletion after.
      * So we will do that here.
      */
-    if (del){
+    if (del)
+    {
          festate->attnumlist = list_delete_cell(festate->attnumlist, del, delprev);
          del  = NULL;
          delprev = NULL;
