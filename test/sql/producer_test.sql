@@ -1,3 +1,4 @@
+\i test/sql/setup.inc
 show datestyle;
 
 CREATE FOREIGN TABLE kafka_test_prod (

@@ -1,4 +1,4 @@
-
+\i test/sql/setup.inc
 CREATE SERVER kafka_server2
 FOREIGN DATA WRAPPER kafka_fdw
 OPTIONS (brokers 'localhost:9092');

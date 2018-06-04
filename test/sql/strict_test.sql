@@ -1,3 +1,4 @@
+\i test/sql/setup.inc
 CREATE FOREIGN TABLE kafka_strict (
     part int OPTIONS (partition 'true'),
     offs bigint OPTIONS (offset 'true'),
