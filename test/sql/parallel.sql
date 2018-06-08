@@ -22,3 +22,5 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR (part = 4 and offs=7);
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR ((part = 4 and offs=7 ) or ( part = 5 and (offs = 10 or offs=12)) );
 
+SELECT COUNT(*) FROM kafka_test_part ;
+EXPLAIN (COSTS OFF) SELECT COUNT(*) FROM kafka_test_part ;
