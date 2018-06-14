@@ -202,29 +202,30 @@ typedef struct KafkaScanPData
  */
 typedef struct KafkaFdwExecutionState
 {
-    KafkaOptions         kafka_options;      /* kafka optopns */
-    ParseOptions         parse_options;      /* merged COPY options */
-    rd_kafka_t *         kafka_handle;       /* connection to act on */
-    rd_kafka_topic_t *   kafka_topic_handle; /* topic to act on */
-    rd_kafka_message_t **buffer;             /* message buffer */
-    StringInfoData       attribute_buf;      /* reused attribute buffer */
-    StringInfoData       junk_buf;           /* reused buffer for junk error messages */
-    char **              raw_fields;         /* pointers into attribute_buf */
-    int                  max_fields;         /* max number of raw_fields */
-    ssize_t              buffer_count;       /* number of messages currently in buffer*/
-    ssize_t              buffer_cursor;      /* current message */
-    FmgrInfo *           in_functions;       /* array of input functions for each attrs */
-    Oid *                typioparams;        /* array of element types for in_functions */
-    List *               attnumlist;         /* integer list of attnums to copy */
-    List *               scanop_list;        /* list of KafkaScanOpP to scan */
-    List *               exec_exprs;         /* expressions to evaluate */
-    KafkaParamValue *    param_values;       /* param_value List matching exec_expr */
-    KafKaPartitionList * partition_list;     /* list and count of partitions */
-    KafkaScanPData *     scan_data;          /* scan data list  */
-    StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
-    char **              attnames;           /* pointer into attname_buf */
-    KafkaScanDataDesc *  scan_data_desc;     /* coordination point for parallel scans */
-    custom_decoder       decode;             /* custom decode function */
+    KafkaOptions         kafka_options;        /* kafka optopns */
+    ParseOptions         parse_options;        /* merged COPY options */
+    rd_kafka_t *         kafka_handle;         /* connection to act on */
+    rd_kafka_topic_t *   kafka_topic_handle;   /* topic to act on */
+    rd_kafka_message_t **buffer;               /* message buffer */
+    StringInfoData       attribute_buf;        /* reused attribute buffer */
+    StringInfoData       junk_buf;             /* reused buffer for junk error messages */
+    char **              raw_fields;           /* pointers into attribute_buf */
+    int                  max_fields;           /* max number of raw_fields */
+    ssize_t              buffer_count;         /* number of messages currently in buffer*/
+    ssize_t              buffer_cursor;        /* current message */
+    FmgrInfo *           in_functions;         /* array of input functions for each attrs */
+    Oid *                typioparams;          /* array of element types for in_functions */
+    List *               attnumlist;           /* integer list of attnums to copy */
+    List *               scanop_list;          /* list of KafkaScanOpP to scan */
+    List *               exec_exprs;           /* expressions to evaluate */
+    KafkaParamValue *    param_values;         /* param_value List matching exec_expr */
+    KafKaPartitionList * partition_list;       /* list and count of partitions */
+    KafkaScanPData *     scan_data;            /* scan data list  */
+    StringInfoData       attname_buf;          /* buffer holding attribute names for json format */
+    char **              attnames;             /* pointer into attname_buf */
+    KafkaScanDataDesc *  scan_data_desc;       /* coordination point for parallel scans */
+    custom_decoder       decode;               /* custom decode function */
+    bool                 offset_limit_reached; /* did the scan reach the offset limit*/
 } KafkaFdwExecutionState;
 
 /*

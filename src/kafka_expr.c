@@ -38,7 +38,8 @@ static void append_scan_p(KafkaScanPData *scand, KafkaScanP scan_p, int64 batch_
 static KafkaScanOp *applyOperator(OpExpr *oper, int partition_attnum, int offset_attnum);
 static KafkaScanOp *getKafkaScanOp(kafka_op op, scanfield field, Node *val_p);
 static KafkaScanOp *intersectKafkaScanOp(KafkaScanOp *a, KafkaScanOp *b);
-
+static void         appendKafkaScanPData(KafkaScanPData *scanp_data, KafkaScanP scan_p);
+static void         expandKafkaScanPData(KafkaScanPData *scanp_data, int64 batch_size);
 KafkaScanOp *
 NewKafkaScanOp()
 {
@@ -428,6 +429,34 @@ KafkaFlattenScanlist(List *              scan_list,
                     KafkaScanP scan_p = { .partition = p, .offset = ol, .offset_lim = (oh == PG_INT64_MAX ? -1 : oh) };
                     append_scan_p(scanp_data, scan_p, batch_size);
                 }
+            }
+        }
+    }
+    expandKafkaScanPData(scanp_data, batch_size);
+}
+
+/* expand the list into chunks off batch_size*/
+static void
+expandKafkaScanPData(KafkaScanPData *scanp_data, int64 batch_size)
+{
+    int i          = 0;
+    int len        = scanp_data->len;
+    int chunk_size = batch_size - 1;
+
+    for (i = 0; i < len; i++)
+    {
+        KafkaScanP *scan_p = &scanp_data->data[i];
+        if (scan_p->offset_lim > 0 && scan_p->offset_lim - scan_p->offset > chunk_size)
+        {
+            int64 rgst         = scan_p->offset + batch_size;
+            int64 rgen         = scan_p->offset_lim;
+            scan_p->offset_lim = scan_p->offset + chunk_size;
+
+            for (; rgst <= rgen; rgst += batch_size)
+            {
+                int64 lim = (rgst + chunk_size < rgen) ? rgst + chunk_size : rgen;
+                appendKafkaScanPData(scanp_data,
+                                     (KafkaScanP){ .partition = scan_p->partition, .offset = rgst, .offset_lim = lim });
             }
         }
     }

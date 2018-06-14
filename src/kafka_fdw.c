@@ -148,7 +148,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 #ifdef DO_PARALLEL
     num_workers = Min(fdw_private->npart - 1, max_parallel_workers_per_gather);
 #else
-    num_workers = 0;
+    num_workers                         = 0;
 #endif
 
     relation = relation_open(foreigntableid, AccessShareLock);
@@ -412,14 +412,15 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     festate->scan_data    = makeScanPData();
 
     /* we we get a parallel scan_data_desc will point to a shared mem segment by InitializeDSMForeignScan */
-    festate->scan_data_desc              = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
+    festate->scan_data_desc = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
 #ifdef DO_PARALLEL
     pg_atomic_init_u32(&festate->scan_data_desc->next_scanp, 0);
 #else
-    festate->scan_data_desc->next_scanp  = 0;
+    festate->scan_data_desc->next_scanp = 0;
 #endif
-    festate->kafka_options = kafka_options;
-    festate->parse_options = parse_options;
+    festate->kafka_options        = kafka_options;
+    festate->parse_options        = parse_options;
+    festate->offset_limit_reached = false;
 
     /* initialize attribute buffer for user in iterate*/
     initStringInfo(&festate->attribute_buf);
@@ -620,6 +621,21 @@ kafkaIterateForeignScan(ForeignScanState *node)
      */
     ExecClearTuple(slot);
 
+    /*
+     * if we found in the previous iteration that we reached the limit form scanp
+     * grep the next work iterm or bail out
+     */
+    if (festate->offset_limit_reached)
+        if (!kafkaNext(festate))
+        {
+            DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
+            return slot;
+        }
+
+    /* initialize the current work item */
+    if (festate->scan_data->cursor >= 0)
+        scan_p = (KafkaScanP *) &festate->scan_data->data[festate->scan_data->cursor];
+
     /* get a message from the buffer if available */
     if (festate->buffer_cursor < festate->buffer_count)
     {
@@ -640,23 +656,6 @@ kafkaIterateForeignScan(ForeignScanState *node)
                     (errcode(ERRCODE_FDW_ERROR),
                      errmsg_internal("kafka_fdw got an error %s when fetching a message from queue",
                                      rd_kafka_err2str(message->err))));
-        }
-
-        /*
-         * if requested offset high is not infinite
-         * check that we did not run over requested offset
-         */
-
-        if (festate->scan_data->cursor >= 0)
-        {
-            scan_p = (KafkaScanP *) &festate->scan_data->data[festate->scan_data->cursor];
-            // list is done we're finished //
-            if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
-            {
-                DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
-                if (!kafkaNext(festate))
-                    return slot;
-            }
         }
     }
 
@@ -690,7 +689,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
               (errcode(ERRCODE_FDW_ERROR),
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
-        if (festate->buffer_count <= 0) /* no more messages within timeout*/
+        if (festate->buffer_count == 0) /* no more messages within timeout*/
         {
             if (!kafkaNext(festate))
                 return slot;
@@ -713,6 +712,8 @@ kafkaIterateForeignScan(ForeignScanState *node)
             }
         }
     }
+
+    festate->offset_limit_reached = (scan_p->offset_lim >= 0 && scan_p->offset_lim <= message->offset);
 
     tupDesc   = RelationGetDescr(node->ss.ss_currentRelation);
     attr      = tupDesc->attrs;
@@ -951,7 +952,7 @@ next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand)
 #ifdef DO_PARALLEL
     next = pg_atomic_fetch_add_u32(&scand->next_scanp, 1);
 #else
-    next = scand->next_scanp++;
+    next                                = scand->next_scanp++;
 #endif
 
     if (next >= scan_p->len)
@@ -1006,8 +1007,9 @@ kafkaStart(KafkaFdwExecutionState *festate)
     KafkaScanP *        scan_p;
     int64_t             low, high;
 
-    festate->buffer_count  = 0;
-    festate->buffer_cursor = 0;
+    festate->buffer_count         = 0;
+    festate->buffer_cursor        = 0;
+    festate->offset_limit_reached = false;
 
     DEBUGLOG("%s", __func__);
 
@@ -1407,7 +1409,7 @@ kafkaInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, voi
     KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
 
-    scand->ps_relid                 = RelationGetRelid(node->ss.ss_currentRelation);
+    scand->ps_relid = RelationGetRelid(node->ss.ss_currentRelation);
     pg_atomic_write_u32(&scand->next_scanp, 0);
     festate->scan_data_desc = scand;
 }
