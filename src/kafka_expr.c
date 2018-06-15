@@ -432,7 +432,7 @@ KafkaFlattenScanlist(List *              scan_list,
             }
         }
     }
-    expandKafkaScanPData(scanp_data, batch_size);
+    // expandKafkaScanPData(scanp_data, batch_size);
 }
 
 /* expand the list into chunks off batch_size*/
