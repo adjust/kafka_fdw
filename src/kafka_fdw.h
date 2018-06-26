@@ -161,10 +161,12 @@ typedef struct ParseOptions
 /* scan koordination */
 typedef struct KafkaScanDataDesc
 {
-    Oid     ps_relid;   /* OID of relation to scan */
-    slock_t ps_mutex;   /* mutual exclusion for next_scanp */
-    int     next_scanp; /* next scanp to fetch */
-    bool    is_parallel;
+    Oid     ps_relid;            /* OID of relation to scan */
+#ifdef DO_PARALLEL
+    pg_atomic_uint32 next_scanp; /* next scanp to fetch */
+#else
+    int     next_scanp;
+#endif
 } KafkaScanDataDesc;
 
 /*

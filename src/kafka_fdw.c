@@ -411,9 +411,11 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
 
     /* we we get a parallel scan_data_desc will point to a shared mem segment by InitializeDSMForeignScan */
     festate->scan_data_desc              = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
+#ifdef DO_PARALLEL
+    pg_atomic_init_u32(&festate->scan_data_desc->next_scanp, 0);
+#else
     festate->scan_data_desc->next_scanp  = 0;
-    festate->scan_data_desc->is_parallel = false;
-
+#endif
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
 
@@ -914,15 +916,13 @@ next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand)
 
     if (scand == NULL)
         return -1;
+
 #ifdef DO_PARALLEL
-    if (scand->is_parallel)
-        SpinLockAcquire(&scand->ps_mutex);
-#endif
+    next = pg_atomic_fetch_add_u32(&scand->next_scanp, 1);
+#else
     next = scand->next_scanp++;
-#ifdef DO_PARALLEL
-    if (scand->is_parallel)
-        SpinLockRelease(&scand->ps_mutex);
 #endif
+
     if (next >= scan_p->len)
         return -1;
 
@@ -1375,9 +1375,9 @@ kafkaInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, voi
 {
     KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
+
     scand->ps_relid                 = RelationGetRelid(node->ss.ss_currentRelation);
-    scand->next_scanp               = 0;
-    SpinLockInit(&scand->ps_mutex);
+    pg_atomic_write_u32(&scand->next_scanp, 0);
     festate->scan_data_desc = scand;
 }
 
@@ -1386,15 +1386,7 @@ kafkaReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, v
 {
     KafkaScanDataDesc *scand = (KafkaScanDataDesc *) coordinate;
 
-    /*
-     * It shouldn't be necessary to acquire the mutex here, but we do it
-     * anyway, just to be tidy.
-     */
-    SpinLockAcquire(&scand->ps_mutex);
-
-    scand->next_scanp = 0;
-
-    SpinLockRelease(&scand->ps_mutex);
+    pg_atomic_write_u32(&scand->next_scanp, 0);
 }
 
 static void
@@ -1402,7 +1394,6 @@ kafkaInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc, void *coo
 {
     KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
-    scand->is_parallel              = true;
     festate->scan_data_desc         = scand;
 }
 
