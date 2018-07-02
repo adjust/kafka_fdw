@@ -27,6 +27,7 @@ SERVER kafka_server OPTIONS
 -- check that we parse the queries right or error out if needed
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 AND offs > 4 AND offs > 10 AND offs < 100;
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 AND offs > 4 AND offs > 10 AND offs <= 100;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (part,offs)=(2,1);
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (part,offs)=(1,2);
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE (part,offs)=(1,1) OR (part,offs)=(2,2);
@@ -38,6 +39,20 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs > 5 AND part = 1 ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE  5 < offs AND 1 = part ;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR (part = 4 and offs=7);
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR ((part = 4 and offs=7 ) or ( part = 5 and (offs = 10 or offs=12)) );
+
+-- check parameterized queries
+SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
+SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
+SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
+SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
+SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
+SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
 
 -- run some memload
 select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;

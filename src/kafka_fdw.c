@@ -172,7 +172,8 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
                                                  NULL, /* no extra plan */
                                                  NIL);
 #ifdef DO_PARALLEL
-    if (num_workers > 0)
+    /* Cannot add parameterized path as partial path */
+    if (num_workers > 0 && baserel->consider_parallel)
     {
         KafkaSetParallelPath((Path *) foreign_path, num_workers, startup_cost, total_cost, run_cost);
         add_partial_path(baserel, (Path *) foreign_path);
