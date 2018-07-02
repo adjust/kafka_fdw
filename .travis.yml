@@ -55,4 +55,4 @@ before_install:
 script:
   - KAFKA_PRODUCER=$PWD/kafka/bin/kafka-console-producer.sh KAFKA_TOPICS=$PWD/kafka/bin/kafka-topics.sh make installcheck
 after_failure:
-  - cat /home/travis/build/adjust/kafka_fdw/regression.diffs
+  - cat regression.diffs
