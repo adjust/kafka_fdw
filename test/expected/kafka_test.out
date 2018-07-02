@@ -1,5 +1,39 @@
 \i test/sql/setup.inc
 \set ECHO none
+/*
+ * Returns EXPLAIN ANALYZE result without any arbitrary numbers like costs
+ * or execution time.
+ *
+ * In Postgres 10 there is a very convinient feature EXPLAIN (SUMMARY OFF),
+ * which removes 'Planning time' and 'Execution time' information lines from
+ * the result. Unfortunately we cannot use it on older PostgreSQL versions.
+ */
+CREATE OR REPLACE FUNCTION explain(query TEXT) RETURNS SETOF RECORD AS $$
+DECLARE
+    rec RECORD;
+BEGIN
+    FOR rec IN EXECUTE 'EXPLAIN (COSTS OFF, TIMING OFF, ANALYZE) ' || query
+    LOOP
+        RETURN NEXT rec;
+    END LOOP;
+END
+$$ LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION explain_invariant(query TEXT)
+RETURNS SETOF text AS $$
+DECLARE
+    rec RECORD;
+BEGIN
+    FOR rec IN SELECT * FROM explain(query) as e(t text)
+    LOOP
+        IF position('Planning time' in rec.t) > 0 OR
+           position('Execution time' in rec.t) > 0
+        THEN
+            CONTINUE;
+        END IF;
+        RETURN NEXT rec.t;
+    END LOOP;
+END
+$$ LANGUAGE plpgsql;
 -- standard setup
 CREATE FOREIGN TABLE kafka_test_part (
     part int OPTIONS (partition 'true'),
@@ -163,14 +197,8 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) 
 (8 rows)
 
 -- check parameterized queries
-SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
- part | offs | some_int |               some_text               | some_date  |        some_time         
-------+------+----------+---------------------------------------+------------+--------------------------
-    0 |    1 |       61 | It's some text, that is for number 61 | 01-01-2015 | Thu Jan 01 00:01:01 2015
-(1 row)
-
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
-                       QUERY PLAN                        
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0');
+                    explain_invariant                    
 ---------------------------------------------------------
  Foreign Scan on kafka_test_part (actual rows=1 loops=1)
    Filter: ((offs = $0) AND (part = 0))
@@ -180,14 +208,8 @@ EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_p
      ->  Result (actual rows=1 loops=1)
 (6 rows)
 
-SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
- part | offs | some_int |              some_text               | some_date  |        some_time         
-------+------+----------+--------------------------------------+------------+--------------------------
-    1 |    0 |        1 | It's some text, that is for number 1 | 01-01-2015 | Thu Jan 01 00:00:01 2015
-(1 row)
-
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
-                       QUERY PLAN                        
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1)');
+                    explain_invariant                    
 ---------------------------------------------------------
  Foreign Scan on kafka_test_part (actual rows=1 loops=1)
    Filter: ((offs = 0) AND (part = $0))
@@ -197,14 +219,8 @@ EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_p
      ->  Result (actual rows=1 loops=1)
 (6 rows)
 
-SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
- part | offs | some_int |               some_text               | some_date  |        some_time         
-------+------+----------+---------------------------------------+------------+--------------------------
-    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
-(1 row)
-
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
-                       QUERY PLAN                        
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0');
+                    explain_invariant                    
 ---------------------------------------------------------
  Foreign Scan on kafka_test_part (actual rows=1 loops=1)
    Filter: ((offs < $0) AND (part = 0))
@@ -214,15 +230,8 @@ EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_p
      ->  Result (actual rows=1 loops=1)
 (6 rows)
 
-SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
- part | offs | some_int |               some_text               | some_date  |        some_time         
-------+------+----------+---------------------------------------+------------+--------------------------
-    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
-    0 |    1 |       61 | It's some text, that is for number 61 | 01-01-2015 | Thu Jan 01 00:01:01 2015
-(2 rows)
-
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
-                       QUERY PLAN                        
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0');
+                    explain_invariant                    
 ---------------------------------------------------------
  Foreign Scan on kafka_test_part (actual rows=2 loops=1)
    Filter: ((offs <= $0) AND (part = 0))
@@ -232,14 +241,8 @@ EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_p
      ->  Result (actual rows=1 loops=1)
 (6 rows)
 
-SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
- part | offs | some_int |               some_text               | some_date  |        some_time         
-------+------+----------+---------------------------------------+------------+--------------------------
-    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
-(1 row)
-
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
-                       QUERY PLAN                        
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1)');
+                    explain_invariant                    
 ---------------------------------------------------------
  Foreign Scan on kafka_test_part (actual rows=1 loops=1)
    Filter: ((part < $0) AND (offs = 0))
@@ -249,15 +252,8 @@ EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_p
      ->  Result (actual rows=1 loops=1)
 (6 rows)
 
-SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
- part | offs | some_int |               some_text               | some_date  |        some_time         
-------+------+----------+---------------------------------------+------------+--------------------------
-    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
-    1 |    0 |        1 | It's some text, that is for number 1  | 01-01-2015 | Thu Jan 01 00:00:01 2015
-(2 rows)
-
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
-                       QUERY PLAN                        
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1)');
+                    explain_invariant                    
 ---------------------------------------------------------
  Foreign Scan on kafka_test_part (actual rows=2 loops=1)
    Filter: ((part <= $0) AND (offs = 0))
