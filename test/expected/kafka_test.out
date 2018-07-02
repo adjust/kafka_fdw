@@ -37,6 +37,15 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 
  Foreign Scan on kafka_test_part
    Filter: ((offs > 4) AND (offs > 10) AND (offs < 100) AND (part = 1) AND (some_int = 3))
    Kafka topic: contrib_regress4
+   scanning: PARTITION = 1 AND OFFSET >= 11 AND OFFSET <= 99
+(4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE part=1 AND some_int = 3 AND offs > 4 AND offs > 10 AND offs <= 100;
+                                         QUERY PLAN                                         
+--------------------------------------------------------------------------------------------
+ Foreign Scan on kafka_test_part
+   Filter: ((offs > 4) AND (offs > 10) AND (offs <= 100) AND (part = 1) AND (some_int = 3))
+   Kafka topic: contrib_regress4
    scanning: PARTITION = 1 AND OFFSET >= 11 AND OFFSET <= 100
 (4 rows)
 
@@ -152,6 +161,112 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) 
    scanning: PARTITION = 5 AND OFFSET = 10
    scanning: PARTITION = 5 AND OFFSET = 12
 (8 rows)
+
+-- check parameterized queries
+SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
+ part | offs | some_int |               some_text               | some_date  |        some_time         
+------+------+----------+---------------------------------------+------------+--------------------------
+    0 |    1 |       61 | It's some text, that is for number 61 | 01-01-2015 | Thu Jan 01 00:01:01 2015
+(1 row)
+
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Foreign Scan on kafka_test_part (actual rows=1 loops=1)
+   Filter: ((offs = $0) AND (part = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION 0 AND OFFSET >= 1 AND OFFSET <= 1
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+(6 rows)
+
+SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
+ part | offs | some_int |              some_text               | some_date  |        some_time         
+------+------+----------+--------------------------------------+------------+--------------------------
+    1 |    0 |        1 | It's some text, that is for number 1 | 01-01-2015 | Thu Jan 01 00:00:01 2015
+(1 row)
+
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Foreign Scan on kafka_test_part (actual rows=1 loops=1)
+   Filter: ((offs = 0) AND (part = $0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION 1 AND OFFSET >= 0 AND OFFSET <= 0
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+(6 rows)
+
+SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
+ part | offs | some_int |               some_text               | some_date  |        some_time         
+------+------+----------+---------------------------------------+------------+--------------------------
+    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
+(1 row)
+
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Foreign Scan on kafka_test_part (actual rows=1 loops=1)
+   Filter: ((offs < $0) AND (part = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION 0 AND OFFSET >= 0 AND OFFSET <= 0
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+(6 rows)
+
+SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
+ part | offs | some_int |               some_text               | some_date  |        some_time         
+------+------+----------+---------------------------------------+------------+--------------------------
+    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
+    0 |    1 |       61 | It's some text, that is for number 61 | 01-01-2015 | Thu Jan 01 00:01:01 2015
+(2 rows)
+
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Foreign Scan on kafka_test_part (actual rows=2 loops=1)
+   Filter: ((offs <= $0) AND (part = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION 0 AND OFFSET >= 0 AND OFFSET <= 1
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+(6 rows)
+
+SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
+ part | offs | some_int |               some_text               | some_date  |        some_time         
+------+------+----------+---------------------------------------+------------+--------------------------
+    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
+(1 row)
+
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Foreign Scan on kafka_test_part (actual rows=1 loops=1)
+   Filter: ((part < $0) AND (offs = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION 0 AND OFFSET >= 0 AND OFFSET <= 0
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+(6 rows)
+
+SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
+ part | offs | some_int |               some_text               | some_date  |        some_time         
+------+------+----------+---------------------------------------+------------+--------------------------
+    0 |    0 |       21 | It's some text, that is for number 21 | 01-01-2015 | Thu Jan 01 00:00:21 2015
+    1 |    0 |        1 | It's some text, that is for number 1  | 01-01-2015 | Thu Jan 01 00:00:01 2015
+(2 rows)
+
+EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Foreign Scan on kafka_test_part (actual rows=2 loops=1)
+   Filter: ((part <= $0) AND (offs = 0))
+   Kafka topic: contrib_regress4
+   scanning: PARTITION 0 AND OFFSET >= 0 AND OFFSET <= 0
+   scanning: PARTITION 1 AND OFFSET >= 0 AND OFFSET <= 0
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+(7 rows)
 
 -- run some memload
 select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;

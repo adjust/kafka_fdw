@@ -291,6 +291,15 @@ get_partition(List *           param_id_list,
 
         for (i = 0; i < num_params; i++)
         {
+            /*
+             * Don't care for < and <= operator while considering lower
+             * bound and the same thing with >/>= and upper bound
+             */
+            if (low_high == LOW && (op == OP_LT || op == OP_LTE))
+                continue;
+            if (low_high == HIGH && (op == OP_GT || op == OP_GTE))
+                continue;
+
             if (param_values[i].paramid == id)
             {
                 if (param_values[i].is_null)
@@ -384,14 +393,13 @@ KafkaFlattenScanlist(List *              scan_list,
             if (isnull)
                 continue;
 
-            if (num_params > 0)
-                ph = get_partition(list_nth(scan_op_list, PartitionParamId),
-                                   list_nth(scan_op_list, PartitionParamOP),
-                                   param_values,
-                                   ph_infinite ? highest_p : ph,
-                                   num_params,
-                                   HIGH,
-                                   &isnull);
+            ph = get_partition(list_nth(scan_op_list, PartitionParamId),
+                               list_nth(scan_op_list, PartitionParamOP),
+                               param_values,
+                               ph_infinite ? highest_p : ph,
+                               num_params,
+                               HIGH,
+                               &isnull);
             if (isnull)
                 continue;
 
@@ -699,11 +707,11 @@ getKafkaScanOp(kafka_op op, scanfield field, Node *val_p)
                     break;
                 case OP_LT:
                     /* if the high watermark is set we take the min otherwise the val */
-                    scan_op->ph          = scan_op->ph_infinite ? val : min_int32(scan_op->ph, --val);
+                    scan_op->ph          = --val;
                     scan_op->ph_infinite = false;
                     break;
                 case OP_LTE:
-                    scan_op->ph          = scan_op->ph_infinite ? val : min_int32(scan_op->ph, val);
+                    scan_op->ph          = val;
                     scan_op->ph_infinite = false;
                     break;
                 default: break;
@@ -736,11 +744,11 @@ getKafkaScanOp(kafka_op op, scanfield field, Node *val_p)
                     scan_op->oh_infinite = false;
                     break;
                 case OP_LT:
-                    scan_op->oh          = scan_op->oh_infinite ? val : min_int64(scan_op->oh, --val);
+                    scan_op->oh          = --val;
                     scan_op->oh_infinite = false;
                     break;
                 case OP_LTE:
-                    scan_op->oh          = scan_op->oh_infinite ? val : min_int64(scan_op->oh, val);
+                    scan_op->oh          = val;
                     scan_op->oh_infinite = false;
                     break;
                 default: break;
@@ -789,7 +797,7 @@ applyKafkaScanOpList(List *a, List *b)
             KafkaScanOp *scb = (KafkaScanOp *) lfirst(lcb);
             scan_op          = intersectKafkaScanOp(sca, scb);
             if (scan_op != NULL)
-                result = lappend(result, intersectKafkaScanOp(sca, scb));
+                result = lappend(result, scan_op);
         }
     }
     return result;
