@@ -1,5 +1,41 @@
 \i test/sql/setup.inc
 
+/*
+ * Returns EXPLAIN ANALYZE result without any arbitrary numbers like costs
+ * or execution time.
+ *
+ * In Postgres 10 there is a very convinient feature EXPLAIN (SUMMARY OFF),
+ * which removes 'Planning time' and 'Execution time' information lines from
+ * the result. Unfortunately we cannot use it on older PostgreSQL versions.
+ */
+CREATE OR REPLACE FUNCTION explain(query TEXT) RETURNS SETOF RECORD AS $$
+DECLARE
+    rec RECORD;
+BEGIN
+    FOR rec IN EXECUTE 'EXPLAIN (COSTS OFF, TIMING OFF, ANALYZE) ' || query
+    LOOP
+        RETURN NEXT rec;
+    END LOOP;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION explain_invariant(query TEXT)
+RETURNS SETOF text AS $$
+DECLARE
+    rec RECORD;
+BEGIN
+    FOR rec IN SELECT * FROM explain(query) as e(t text)
+    LOOP
+        IF position('Planning time' in rec.t) > 0 OR
+           position('Execution time' in rec.t) > 0
+        THEN
+            CONTINUE;
+        END IF;
+        RETURN NEXT rec.t;
+    END LOOP;
+END
+$$ LANGUAGE plpgsql;
+
 -- standard setup
 CREATE FOREIGN TABLE kafka_test_part (
     part int OPTIONS (partition 'true'),
@@ -41,18 +77,12 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) 
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR ((part = 4 and offs=7 ) or ( part = 5 and (offs = 10 or offs=12)) );
 
 -- check parameterized queries
-SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0;
-SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1);
-SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0;
-SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0;
-SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1);
-SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
-EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1);
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = (SELECT 1) AND part = 0');
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = 0 AND part = (SELECT 1)');
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs < (SELECT 1) AND part = 0');
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs <= (SELECT 1) AND part = 0');
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = 0 AND part < (SELECT 1)');
+SELECT explain_invariant('SELECT * FROM kafka_test_part WHERE offs = 0 AND part <= (SELECT 1)');
 
 -- run some memload
 select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
