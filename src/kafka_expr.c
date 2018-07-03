@@ -435,7 +435,7 @@ KafkaFlattenScanlist(List *              scan_list,
     // expandKafkaScanPData(scanp_data, batch_size);
 }
 
-/* expand the list into chunks off batch_size*/
+/* expand the list into chunks off batch_size */
 static void
 expandKafkaScanPData(KafkaScanPData *scanp_data, int64 batch_size)
 {

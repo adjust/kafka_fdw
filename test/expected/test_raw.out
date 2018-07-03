@@ -1,0 +1,24 @@
+CREATE FOREIGN TABLE kafka_test_raw (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    message text
+)
+SERVER kafka_server OPTIONS
+    (format 'raw', topic 'contrib_regress4', batch_size '30', buffer_delay '100');
+-- we can only check if the meesaage has a certain pattern as part / offs is not deteministic
+SELECT part, offs,  message ~ E'\\d{4},"It\'s some text, that is for number \\d{4}",\\d{4}-\\d{2}-\\d{2},\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}' FROM kafka_test_raw WHERE part=1 AND offs BETWEEN 100 AND 110 ORDER BY offs;
+ part | offs | ?column? 
+------+------+----------
+    1 |  100 | t
+    1 |  101 | t
+    1 |  102 | t
+    1 |  103 | t
+    1 |  104 | t
+    1 |  105 | t
+    1 |  106 | t
+    1 |  107 | t
+    1 |  108 | t
+    1 |  109 | t
+    1 |  110 | t
+(11 rows)
+
