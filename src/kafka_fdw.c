@@ -449,6 +449,7 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
      */
     in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
     typioparams  = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
+    festate->attisarray = NULL;
 
     for (attnum = 1; attnum <= num_phys_attrs; attnum++)
     {
@@ -463,7 +464,11 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
         fmgr_info(in_func_oid, &in_functions[attnum - 1]);
 
         if (parse_options.format == JSON)
+        {
             festate->attnames[attnum - 1] = getJsonAttname(attr[attnum - 1], &festate->attname_buf);
+            if (type_is_array(attr[attnum - 1]->atttypid))
+                festate->attisarray = bms_add_member(festate->attisarray, attnum - 1);
+        }
     }
 
     /* We keep those variables in festate. */
@@ -523,6 +528,55 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
         festate->param_values = NULL;
         festate->exec_exprs   = NIL;
     }
+}
+
+/*
+ * Transform json array string to postgres array format. E.g.:
+ * [1,2,3] -> {1,2,3}
+ */
+static char *
+transform_json_array(char *string)
+{
+    char *s;
+    bool in_quote = false;
+
+    for (s = string; *s != '\0'; s++)
+    {
+        if (!in_quote)
+        {
+            switch (*s)
+            {
+                case '[': *s = '{'; break;
+                case ']': *s = '}'; break;
+                case '\"':
+                    in_quote = true;
+                    break;
+            }
+        }
+        else  /* ignore symbols under quotation */
+        {
+            switch (*s)
+            {
+                case '\"':
+                    /* end of quotation */
+                    in_quote = false;
+                    break;
+                case '\\':
+                    /* special character, ignore the next symbol */
+                    s++;
+                    /*
+                     * shouldn't normally happen, but it could be that the
+                     * message is malformed and after backslash goes the
+                     * terminator symbol. Better check it to avoid reading
+                     * outside the allocated string
+                     */
+                    if (*s == '\0')
+                        return string;
+                    break;
+            }
+        }
+    }
+    return string;
 }
 
 /*
@@ -801,6 +855,11 @@ kafkaIterateForeignScan(ForeignScanState *node)
             nulls[m] = true;
             continue;
         }
+
+        /* Transform json array into format postgres can understand */
+        if (bms_is_member(m, festate->attisarray))
+            string = transform_json_array(string);
+
         if (ignore_junk)
         {
             PG_TRY();

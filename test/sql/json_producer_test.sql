@@ -5,23 +5,24 @@ CREATE FOREIGN TABLE kafka_test_prod_json (
     some_int int,
     some_text text,
     some_date date,
-    some_time timestamp
+    some_time timestamp,
+    some_array text[]
 )
 SERVER kafka_server OPTIONS
     (format 'json', topic 'contrib_regress_prod_json', batch_size '3000', buffer_delay '100');
 
-INSERT INTO kafka_test_prod_json(part, some_int, some_text, some_date)
+INSERT INTO kafka_test_prod_json(part, some_int, some_text, some_date, some_array)
     VALUES
-    (1, 1,'foo bar 1','2017-01-01'),
-    (1, 2,'foo text 2','2017-01-02'),
-    (1, 3,'foo text 3','2017-01-03'),
-    (1, 4,'foo text 4','2017-01-04'),
-    (1, 5,'foo text 5','2017-01-05'),
-    (1, 6,'foo text 6','2017-01-06'),
-    (1, 7,'foo bar 7','2017-01-07'),
-    (1, 8,'foo text 8','2017-01-08'),
-    (1, 9,'foo text 9','2017-01-09'),
-    (1, 10,'foo text 10','2017-01-10')
+    (1, 1,'foo bar 1','2017-01-01', array[1,2,3]),
+    (1, 2,'foo text 2','2017-01-02', array[[1,2], [3,4]]),
+    (1, 3,'foo text 3','2017-01-03', array['test [brackets]', 'test "[brackets]" in quotes']),
+    (1, 4,'foo text 4','2017-01-04', NULL),
+    (1, 5,'foo text 5','2017-01-05', NULL),
+    (1, 6,'foo text 6','2017-01-06', NULL),
+    (1, 7,'foo bar 7','2017-01-07', NULL),
+    (1, 8,'foo text 8','2017-01-08', NULL),
+    (1, 9,'foo text 9','2017-01-09', NULL),
+    (1, 10,'foo text 10','2017-01-10', NULL)
 
 RETURNING *;
 
