@@ -115,5 +115,6 @@ KafkaSetParallelPath(Path *path, int num_workers, Cost startup_cost, Cost total_
     path->total_cost       = startup_cost + run_cost / parallel_divisor;
     path->parallel_aware   = true;
     path->parallel_workers = num_workers;
+    path->parallel_safe    = true;
 }
 #endif

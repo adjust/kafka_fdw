@@ -1,0 +1,13 @@
+CREATE EXTENSION base36;
+CREATE FOREIGN TABLE kafka_test_custom (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    app_token bigbase36, tracker_id bigint, event_type_id int, app_version text
+)
+SERVER kafka_server OPTIONS
+    (format 'custom', decode_lib '$libdir/aj_proto', decode_func 'aj_proto_segment' ,topic 'backend', batch_size '30', buffer_delay '100');
+ERROR:  server "kafka_server" does not exist
+SELECT part, offs, app_token, tracker_id, event_type_id, app_version  FROM kafka_test_custom WHERE part=1 AND offs BETWEEN 1 AND 5 ORDER BY offs;
+ERROR:  relation "kafka_test_custom" does not exist
+LINE 1: ...ken, tracker_id, event_type_id, app_version  FROM kafka_test...
+                                                             ^

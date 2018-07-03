@@ -1,9 +1,11 @@
 #include "kafka_fdw.h"
 #include "compatibility.h"
+#include "funcapi.h"
 #include "parser/parsetree.h"
 #include "storage/spin.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/typcache.h"
 
 PG_MODULE_MAGIC;
 
@@ -146,7 +148,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 #ifdef DO_PARALLEL
     num_workers = Min(fdw_private->npart - 1, max_parallel_workers_per_gather);
 #else
-    num_workers = 0;
+    num_workers                         = 0;
 #endif
 
     relation = relation_open(foreigntableid, AccessShareLock);
@@ -410,14 +412,15 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     festate->scan_data    = makeScanPData();
 
     /* we we get a parallel scan_data_desc will point to a shared mem segment by InitializeDSMForeignScan */
-    festate->scan_data_desc              = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
+    festate->scan_data_desc = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
 #ifdef DO_PARALLEL
     pg_atomic_init_u32(&festate->scan_data_desc->next_scanp, 0);
 #else
-    festate->scan_data_desc->next_scanp  = 0;
+    festate->scan_data_desc->next_scanp = 0;
 #endif
-    festate->kafka_options = kafka_options;
-    festate->parse_options = parse_options;
+    festate->kafka_options        = kafka_options;
+    festate->parse_options        = parse_options;
+    festate->offset_limit_reached = false;
 
     /* initialize attribute buffer for user in iterate*/
     initStringInfo(&festate->attribute_buf);
@@ -439,6 +442,11 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     {
         initStringInfo(&festate->attname_buf);
         festate->attnames = palloc0(num_phys_attrs * sizeof(char *));
+    }
+    if (parse_options.format == CUSTOM)
+    {
+        festate->decode =
+          (custom_decoder) load_external_function(parse_options.decode_lib, parse_options.decode_func, true, NULL);
     }
 
     /*
@@ -613,6 +621,21 @@ kafkaIterateForeignScan(ForeignScanState *node)
      */
     ExecClearTuple(slot);
 
+    /*
+     * if we found in the previous iteration that we reached the limit form scanp
+     * grep the next work iterm or bail out
+     */
+    if (festate->offset_limit_reached)
+        if (!kafkaNext(festate))
+        {
+            DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
+            return slot;
+        }
+
+    /* initialize the current work item */
+    if (festate->scan_data->cursor >= 0)
+        scan_p = (KafkaScanP *) &festate->scan_data->data[festate->scan_data->cursor];
+
     /* get a message from the buffer if available */
     if (festate->buffer_cursor < festate->buffer_count)
     {
@@ -633,23 +656,6 @@ kafkaIterateForeignScan(ForeignScanState *node)
                     (errcode(ERRCODE_FDW_ERROR),
                      errmsg_internal("kafka_fdw got an error %s when fetching a message from queue",
                                      rd_kafka_err2str(message->err))));
-        }
-
-        /*
-         * if requested offset high is not infinite
-         * check that we did not run over requested offset
-         */
-
-        if (festate->scan_data->cursor >= 0)
-        {
-            scan_p = (KafkaScanP *) &festate->scan_data->data[festate->scan_data->cursor];
-            // list is done we're finished //
-            if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
-            {
-                DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
-                if (!kafkaNext(festate))
-                    return slot;
-            }
         }
     }
 
@@ -683,7 +689,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
               (errcode(ERRCODE_FDW_ERROR),
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
-        if (festate->buffer_count <= 0) /* no more messages within timeout*/
+        if (festate->buffer_count == 0) /* no more messages within timeout*/
         {
             if (!kafkaNext(festate))
                 return slot;
@@ -707,6 +713,8 @@ kafkaIterateForeignScan(ForeignScanState *node)
         }
     }
 
+    festate->offset_limit_reached = (scan_p->offset_lim >= 0 && scan_p->offset_lim <= message->offset);
+
     tupDesc   = RelationGetDescr(node->ss.ss_currentRelation);
     attr      = tupDesc->attrs;
     num_attrs = list_length(festate->attnumlist);
@@ -716,138 +724,162 @@ kafkaIterateForeignScan(ForeignScanState *node)
 
     // DEBUGLOG("message: %s", message->payload);
 
-    fldct = KafkaReadAttributes(message->payload, message->len, festate, parse_options->format, &error);
-
-    /* unterminated quote, total junk */
-    if (error && parse_options->format == CSV)
+    if (parse_options->format != CUSTOM)
     {
-        if (kafka_options->strict)
-            ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
-        else
+        fldct = KafkaReadAttributes(message->payload, message->len, festate, parse_options->format, &error);
+
+        /* unterminated quote, total junk */
+        if (error && parse_options->format == CSV)
+        {
+            if (kafka_options->strict)
+                ereport(ERROR, (errcode(ERRCODE_BAD_COPY_FILE_FORMAT), errmsg("unterminated CSV quoted field")));
+            else
+            {
+                catched_error = true;
+                if (kafka_options->junk_error_attnum != -1)
+                    appendStringInfoString(&festate->junk_buf, "unterminated CSV quoted field");
+                MemSet(nulls, true, num_attrs);
+            }
+        }
+        else if (error && parse_options->format == JSON)
         {
             catched_error = true;
-            if (kafka_options->junk_error_attnum != -1)
-                appendStringInfoString(&festate->junk_buf, "unterminated CSV quoted field");
             MemSet(nulls, true, num_attrs);
         }
-    }
-    else if (error && parse_options->format == JSON)
-    {
-        catched_error = true;
-        MemSet(nulls, true, num_attrs);
-    }
-    /* to much data */
-    else if (fldct > kafka_options->num_parse_col)
-    {
-        if (kafka_options->strict)
-            ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("extra data after last expected column")));
-
-        if (ignore_junk)
+        /* to much data */
+        else if (fldct > kafka_options->num_parse_col)
         {
-            catched_error = true;
-            if (kafka_options->junk_error_attnum != -1)
-                appendStringInfoString(&festate->junk_buf, "extra data after last expected column");
+            if (kafka_options->strict)
+                ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("extra data after last expected column")));
+
+            if (ignore_junk)
+            {
+                catched_error = true;
+                if (kafka_options->junk_error_attnum != -1)
+                    appendStringInfoString(&festate->junk_buf, "extra data after last expected column");
+            }
+        }
+        /* to less data*/
+        else if (fldct < kafka_options->num_parse_col)
+        {
+            if (kafka_options->strict)
+                ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("missing data in Kafka Stream")));
+
+            if (ignore_junk)
+            {
+                catched_error = true;
+                if (kafka_options->junk_error_attnum != -1)
+                    appendStringInfoString(&festate->junk_buf, "missing data in Kafka Stream");
+            }
         }
     }
-    /* to less data*/
-    else if (fldct < kafka_options->num_parse_col)
-    {
-        if (kafka_options->strict)
-            ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg("missing data in Kafka Stream")));
 
-        if (ignore_junk)
-        {
-            catched_error = true;
-            if (kafka_options->junk_error_attnum != -1)
-                appendStringInfoString(&festate->junk_buf, "missing data in Kafka Stream");
-        }
+    if (parse_options->format == CUSTOM)
+    {
+        festate->decode(message->payload,
+                        message->len,
+                        values,
+                        nulls,
+                        num_attrs,
+                        kafka_options->partition_attnum - 1,
+                        kafka_options->offset_attnum - 1);
+
+        values[kafka_options->partition_attnum - 1] = Int32GetDatum(message->partition);
+        nulls[kafka_options->partition_attnum - 1]  = false;
+        values[kafka_options->offset_attnum - 1]    = Int64GetDatum(message->offset);
+        nulls[kafka_options->offset_attnum - 1]     = false;
     }
 
     /* Loop to read the user attributes on the line. */
-    fldnum = 0;
-    foreach (cur, festate->attnumlist)
+    if (parse_options->format != CUSTOM)
     {
-        int   attnum = lfirst_int(cur);
-        int   m      = attnum - 1;
-        char *string;
+        fldnum = 0;
+        foreach (cur, festate->attnumlist)
+        {
+            int   attnum = lfirst_int(cur);
+            int   m      = attnum - 1;
+            char *string;
 
-        if (attnum == kafka_options->junk_attnum || attnum == kafka_options->junk_error_attnum)
-        {
-            nulls[m] = true;
-            continue;
-        }
-
-        if (attnum == kafka_options->partition_attnum)
-        {
-            values[m] = Int32GetDatum(message->partition);
-            nulls[m]  = false;
-            continue;
-        }
-        if (attnum == kafka_options->offset_attnum)
-        {
-            values[m] = Int64GetDatum(message->offset);
-            nulls[m]  = false;
-            continue;
-        }
-        if (fldnum >= fldct)
-        {
-            nulls[m] = true;
-            continue;
-        }
-        string = festate->raw_fields[fldnum++];
-
-        if (string == NULL)
-        {
-            nulls[m] = true;
-            continue;
-        }
-        if (ignore_junk)
-        {
-            PG_TRY();
+            if (attnum == kafka_options->junk_attnum || attnum == kafka_options->junk_error_attnum)
             {
-                values[m] =
-                  InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
-                nulls[m] = false;
+                nulls[m] = true;
+                continue;
             }
-            PG_CATCH();
+
+            if (attnum == kafka_options->partition_attnum)
             {
-                values[m]     = (Datum) 0;
-                nulls[m]      = true;
-                catched_error = true;
+                values[m] = Int32GetDatum(message->partition);
+                nulls[m]  = false;
+                continue;
+            }
+            if (attnum == kafka_options->offset_attnum)
+            {
+                values[m] = Int64GetDatum(message->offset);
+                nulls[m]  = false;
+                continue;
+            }
 
-                MemoryContextSwitchTo(ccxt);
+            if (fldnum >= fldct)
+            {
+                nulls[m] = true;
+                continue;
+            }
+            string = festate->raw_fields[fldnum++];
 
-                /* accumulate errors if needed */
-                if (kafka_options->junk_error_attnum != -1)
+            if (string == NULL)
+            {
+                nulls[m] = true;
+                continue;
+            }
+            if (ignore_junk)
+            {
+                PG_TRY();
                 {
-                    ErrorData *errdata = CopyErrorData();
-
-                    if (festate->junk_buf.len > 0)
-                        appendStringInfoCharMacro(&festate->junk_buf, '\n');
-
-                    appendStringInfoString(&festate->junk_buf, errdata->message);
+                    values[m] =
+                      InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
+                    nulls[m] = false;
                 }
-                FlushErrorState();
+                PG_CATCH();
+                {
+                    values[m]     = (Datum) 0;
+                    nulls[m]      = true;
+                    catched_error = true;
+
+                    MemoryContextSwitchTo(ccxt);
+
+                    /* accumulate errors if needed */
+                    if (kafka_options->junk_error_attnum != -1)
+                    {
+                        ErrorData *errdata = CopyErrorData();
+
+                        if (festate->junk_buf.len > 0)
+                            appendStringInfoCharMacro(&festate->junk_buf, '\n');
+
+                        appendStringInfoString(&festate->junk_buf, errdata->message);
+                    }
+                    FlushErrorState();
+                }
+                PG_END_TRY();
+                continue;
             }
-            PG_END_TRY();
-            continue;
+
+            values[m] =
+              InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
+            nulls[m] = false;
         }
 
-        values[m] = InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
-        nulls[m]  = false;
-    }
-
-    if (catched_error)
-    {
-        if (kafka_options->junk_attnum != -1)
+        if (catched_error)
         {
-            values[kafka_options->junk_attnum - 1] = PointerGetDatum(cstring_to_text(message->payload));
-            nulls[kafka_options->junk_attnum - 1]  = false;
-        }
-        if (kafka_options->junk_error_attnum != -1)
-        {
-            values[kafka_options->junk_error_attnum - 1] = PointerGetDatum(cstring_to_text(festate->junk_buf.data));
-            nulls[kafka_options->junk_error_attnum - 1]  = false;
+            if (kafka_options->junk_attnum != -1)
+            {
+                values[kafka_options->junk_attnum - 1] = PointerGetDatum(cstring_to_text(message->payload));
+                nulls[kafka_options->junk_attnum - 1]  = false;
+            }
+            if (kafka_options->junk_error_attnum != -1)
+            {
+                values[kafka_options->junk_error_attnum - 1] = PointerGetDatum(cstring_to_text(festate->junk_buf.data));
+                nulls[kafka_options->junk_error_attnum - 1]  = false;
+            }
         }
     }
 
@@ -920,7 +952,7 @@ next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand)
 #ifdef DO_PARALLEL
     next = pg_atomic_fetch_add_u32(&scand->next_scanp, 1);
 #else
-    next = scand->next_scanp++;
+    next                                = scand->next_scanp++;
 #endif
 
     if (next >= scan_p->len)
@@ -975,8 +1007,9 @@ kafkaStart(KafkaFdwExecutionState *festate)
     KafkaScanP *        scan_p;
     int64_t             low, high;
 
-    festate->buffer_count  = 0;
-    festate->buffer_cursor = 0;
+    festate->buffer_count         = 0;
+    festate->buffer_cursor        = 0;
+    festate->offset_limit_reached = false;
 
     DEBUGLOG("%s", __func__);
 
@@ -1376,7 +1409,7 @@ kafkaInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, voi
     KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
 
-    scand->ps_relid                 = RelationGetRelid(node->ss.ss_currentRelation);
+    scand->ps_relid = RelationGetRelid(node->ss.ss_currentRelation);
     pg_atomic_write_u32(&scand->next_scanp, 0);
     festate->scan_data_desc = scand;
 }
