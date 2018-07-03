@@ -208,6 +208,7 @@ typedef struct KafkaFdwExecutionState
     ssize_t              buffer_cursor;      /* current message */
     FmgrInfo *           in_functions;       /* array of input functions for each attrs */
     Oid *                typioparams;        /* array of element types for in_functions */
+    Bitmapset *          attisarray;         /* bitmap of attributes of array type */
     List *               attnumlist;         /* integer list of attnums to copy */
     List *               scanop_list;        /* list of KafkaScanOpP to scan */
     List *               exec_exprs;         /* expressions to evaluate */
