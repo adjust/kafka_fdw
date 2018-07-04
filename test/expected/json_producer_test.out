@@ -1,5 +1,6 @@
 \i test/sql/setup.inc
 \set ECHO none
+CREATE TYPE my_type AS (a int, b text);
 CREATE FOREIGN TABLE kafka_test_prod_json (
     part int OPTIONS (partition 'true'),
     offs bigint OPTIONS (offset 'true'),
@@ -7,35 +8,38 @@ CREATE FOREIGN TABLE kafka_test_prod_json (
     some_text text,
     some_date date,
     some_time timestamp,
-    some_array text[]
+    some_timetz timestamptz,
+    some_array text[],
+    some_custom_type my_type,
+    some_json jsonb
 )
 SERVER kafka_server OPTIONS
     (format 'json', topic 'contrib_regress_prod_json', batch_size '3000', buffer_delay '100');
-INSERT INTO kafka_test_prod_json(part, some_int, some_text, some_date, some_array)
+INSERT INTO kafka_test_prod_json(part, some_int, some_text, some_date, some_time, some_timetz, some_json, some_array)
     VALUES
-    (1, 1,'foo bar 1','2017-01-01', array[1,2,3]),
-    (1, 2,'foo text 2','2017-01-02', array[[1,2], [3,4]]),
-    (1, 3,'foo text 3','2017-01-03', array['test [brackets]', 'test "[brackets]" in quotes']),
-    (1, 4,'foo text 4','2017-01-04', NULL),
-    (1, 5,'foo text 5','2017-01-05', NULL),
-    (1, 6,'foo text 6','2017-01-06', NULL),
-    (1, 7,'foo bar 7','2017-01-07', NULL),
-    (1, 8,'foo text 8','2017-01-08', NULL),
-    (1, 9,'foo text 9','2017-01-09', NULL),
-    (1, 10,'foo text 10','2017-01-10', NULL)
+    (1, 1,'foo bar 1',   '2017-01-01', '2017-01-01 00:00:01', '2017-01-01 00:00:01', '{"a": 1, "b": 10}', array[1,2,3]),
+    (1, 2,'foo text 2',  '2017-01-02', '2017-01-02 00:00:01', '2017-01-02 00:00:01', '{"a": 2, "b": 9}',  array[[1,2], [3,4]]),
+    (1, 3,'foo text 3',  '2017-01-03', '2017-01-03 00:00:01', '2017-01-03 00:00:01', '{"a": 3, "b": 8}',  array['test [brackets]', 'test "[brackets]" in quotes']),
+    (1, 4,'foo text 4',  '2017-01-04', '2017-01-04 00:00:01', '2017-01-04 00:00:01', '{"a": 4, "b": 7}',  NULL),
+    (1, 5,'foo text 5',  '2017-01-05', '2017-01-05 00:00:01', '2017-01-05 00:00:01', '{"a": 5, "b": 6}',  NULL),
+    (1, 6,'foo text 6',  '2017-01-06', '2017-01-06 00:00:01', '2017-01-06 00:00:01', '{"a": 6, "b": 5}',  NULL),
+    (1, 7,'foo bar 7',   '2017-01-07', '2017-01-07 00:00:01', '2017-01-07 00:00:01', '{"a": 7, "b": 4}',  NULL),
+    (1, 8,'foo text 8',  '2017-01-08', '2017-01-08 00:00:01', '2017-01-08 00:00:01', '{"a": 8, "b": 3}',  NULL),
+    (1, 9,'foo text 9',  '2017-01-09', '2017-01-09 00:00:01', '2017-01-09 00:00:01', '{"a": 9, "b": 2}',  NULL),
+    (1, 10,'foo text 10','2017-01-10', '2017-01-10 00:00:01', '2017-01-10 00:00:01', '{"a": 10, "b": 1}', NULL)
 RETURNING *;
- part | offs | some_int |  some_text  | some_date  | some_time |                     some_array                      
-------+------+----------+-------------+------------+-----------+-----------------------------------------------------
-    1 |      |        1 | foo bar 1   | 01-01-2017 |           | {1,2,3}
-    1 |      |        2 | foo text 2  | 01-02-2017 |           | {{1,2},{3,4}}
-    1 |      |        3 | foo text 3  | 01-03-2017 |           | {"test [brackets]","test \"[brackets]\" in quotes"}
-    1 |      |        4 | foo text 4  | 01-04-2017 |           | 
-    1 |      |        5 | foo text 5  | 01-05-2017 |           | 
-    1 |      |        6 | foo text 6  | 01-06-2017 |           | 
-    1 |      |        7 | foo bar 7   | 01-07-2017 |           | 
-    1 |      |        8 | foo text 8  | 01-08-2017 |           | 
-    1 |      |        9 | foo text 9  | 01-09-2017 |           | 
-    1 |      |       10 | foo text 10 | 01-10-2017 |           | 
+ part | offs | some_int |  some_text  | some_date  |        some_time         |         some_timetz          |                     some_array                      | some_custom_type |     some_json     
+------+------+----------+-------------+------------+--------------------------+------------------------------+-----------------------------------------------------+------------------+-------------------
+    1 |      |        1 | foo bar 1   | 01-01-2017 | Sun Jan 01 00:00:01 2017 | Sun Jan 01 00:00:01 2017 PST | {1,2,3}                                             |                  | {"a": 1, "b": 10}
+    1 |      |        2 | foo text 2  | 01-02-2017 | Mon Jan 02 00:00:01 2017 | Mon Jan 02 00:00:01 2017 PST | {{1,2},{3,4}}                                       |                  | {"a": 2, "b": 9}
+    1 |      |        3 | foo text 3  | 01-03-2017 | Tue Jan 03 00:00:01 2017 | Tue Jan 03 00:00:01 2017 PST | {"test [brackets]","test \"[brackets]\" in quotes"} |                  | {"a": 3, "b": 8}
+    1 |      |        4 | foo text 4  | 01-04-2017 | Wed Jan 04 00:00:01 2017 | Wed Jan 04 00:00:01 2017 PST |                                                     |                  | {"a": 4, "b": 7}
+    1 |      |        5 | foo text 5  | 01-05-2017 | Thu Jan 05 00:00:01 2017 | Thu Jan 05 00:00:01 2017 PST |                                                     |                  | {"a": 5, "b": 6}
+    1 |      |        6 | foo text 6  | 01-06-2017 | Fri Jan 06 00:00:01 2017 | Fri Jan 06 00:00:01 2017 PST |                                                     |                  | {"a": 6, "b": 5}
+    1 |      |        7 | foo bar 7   | 01-07-2017 | Sat Jan 07 00:00:01 2017 | Sat Jan 07 00:00:01 2017 PST |                                                     |                  | {"a": 7, "b": 4}
+    1 |      |        8 | foo text 8  | 01-08-2017 | Sun Jan 08 00:00:01 2017 | Sun Jan 08 00:00:01 2017 PST |                                                     |                  | {"a": 8, "b": 3}
+    1 |      |        9 | foo text 9  | 01-09-2017 | Mon Jan 09 00:00:01 2017 | Mon Jan 09 00:00:01 2017 PST |                                                     |                  | {"a": 9, "b": 2}
+    1 |      |       10 | foo text 10 | 01-10-2017 | Tue Jan 10 00:00:01 2017 | Tue Jan 10 00:00:01 2017 PST |                                                     |                  | {"a": 10, "b": 1}
 (10 rows)
 
 -- run some memload
@@ -82,18 +86,18 @@ select count(*) from (select json_agg(s) from generate_series(1, 1000000) s) a;
 (1 row)
 
 SELECT * FROM kafka_test_prod_json WHERE offs >= 0 and part=1;
- part | offs | some_int |  some_text  | some_date  | some_time |                     some_array                      
-------+------+----------+-------------+------------+-----------+-----------------------------------------------------
-    1 |    0 |        1 | foo bar 1   | 01-01-2017 |           | {1,2,3}
-    1 |    1 |        2 | foo text 2  | 01-02-2017 |           | {{1,2},{3,4}}
-    1 |    2 |        3 | foo text 3  | 01-03-2017 |           | {"test [brackets]","test \"[brackets]\" in quotes"}
-    1 |    3 |        4 | foo text 4  | 01-04-2017 |           | 
-    1 |    4 |        5 | foo text 5  | 01-05-2017 |           | 
-    1 |    5 |        6 | foo text 6  | 01-06-2017 |           | 
-    1 |    6 |        7 | foo bar 7   | 01-07-2017 |           | 
-    1 |    7 |        8 | foo text 8  | 01-08-2017 |           | 
-    1 |    8 |        9 | foo text 9  | 01-09-2017 |           | 
-    1 |    9 |       10 | foo text 10 | 01-10-2017 |           | 
+ part | offs | some_int |  some_text  | some_date  |        some_time         |         some_timetz          |                     some_array                      | some_custom_type |     some_json     
+------+------+----------+-------------+------------+--------------------------+------------------------------+-----------------------------------------------------+------------------+-------------------
+    1 |    0 |        1 | foo bar 1   | 01-01-2017 | Sun Jan 01 00:00:01 2017 | Sun Jan 01 00:00:01 2017 PST | {1,2,3}                                             |                  | {"a": 1, "b": 10}
+    1 |    1 |        2 | foo text 2  | 01-02-2017 | Mon Jan 02 00:00:01 2017 | Mon Jan 02 00:00:01 2017 PST | {{1,2},{3,4}}                                       |                  | {"a": 2, "b": 9}
+    1 |    2 |        3 | foo text 3  | 01-03-2017 | Tue Jan 03 00:00:01 2017 | Tue Jan 03 00:00:01 2017 PST | {"test [brackets]","test \"[brackets]\" in quotes"} |                  | {"a": 3, "b": 8}
+    1 |    3 |        4 | foo text 4  | 01-04-2017 | Wed Jan 04 00:00:01 2017 | Wed Jan 04 00:00:01 2017 PST |                                                     |                  | {"a": 4, "b": 7}
+    1 |    4 |        5 | foo text 5  | 01-05-2017 | Thu Jan 05 00:00:01 2017 | Thu Jan 05 00:00:01 2017 PST |                                                     |                  | {"a": 5, "b": 6}
+    1 |    5 |        6 | foo text 6  | 01-06-2017 | Fri Jan 06 00:00:01 2017 | Fri Jan 06 00:00:01 2017 PST |                                                     |                  | {"a": 6, "b": 5}
+    1 |    6 |        7 | foo bar 7   | 01-07-2017 | Sat Jan 07 00:00:01 2017 | Sat Jan 07 00:00:01 2017 PST |                                                     |                  | {"a": 7, "b": 4}
+    1 |    7 |        8 | foo text 8  | 01-08-2017 | Sun Jan 08 00:00:01 2017 | Sun Jan 08 00:00:01 2017 PST |                                                     |                  | {"a": 8, "b": 3}
+    1 |    8 |        9 | foo text 9  | 01-09-2017 | Mon Jan 09 00:00:01 2017 | Mon Jan 09 00:00:01 2017 PST |                                                     |                  | {"a": 9, "b": 2}
+    1 |    9 |       10 | foo text 10 | 01-10-2017 | Tue Jan 10 00:00:01 2017 | Tue Jan 10 00:00:01 2017 PST |                                                     |                  | {"a": 10, "b": 1}
 (10 rows)
 
 INSERT INTO kafka_test_prod_json(some_int, some_text, some_date, some_time)
@@ -157,3 +161,5 @@ UNION ALL
       231 | It's some text, that is for number 231 | 01-01-2015
 (1 row)
 
+--- check exporting composite types to json format (importing is not yet supported)
+INSERT INTO kafka_test_prod_json (some_custom_type) VALUES ((1, 'test'));
