@@ -1,4 +1,7 @@
 \i test/sql/setup.inc
+
+CREATE TYPE my_type AS (a int, b text);
+
 CREATE FOREIGN TABLE kafka_test_prod_json (
     part int OPTIONS (partition 'true'),
     offs bigint OPTIONS (offset 'true'),
@@ -6,23 +9,26 @@ CREATE FOREIGN TABLE kafka_test_prod_json (
     some_text text,
     some_date date,
     some_time timestamp,
-    some_array text[]
+    some_timetz timestamptz,
+    some_array text[],
+    some_custom_type my_type,
+    some_json jsonb
 )
 SERVER kafka_server OPTIONS
     (format 'json', topic 'contrib_regress_prod_json', batch_size '3000', buffer_delay '100');
 
-INSERT INTO kafka_test_prod_json(part, some_int, some_text, some_date, some_array)
+INSERT INTO kafka_test_prod_json(part, some_int, some_text, some_date, some_time, some_timetz, some_json, some_array)
     VALUES
-    (1, 1,'foo bar 1','2017-01-01', array[1,2,3]),
-    (1, 2,'foo text 2','2017-01-02', array[[1,2], [3,4]]),
-    (1, 3,'foo text 3','2017-01-03', array['test [brackets]', 'test "[brackets]" in quotes']),
-    (1, 4,'foo text 4','2017-01-04', NULL),
-    (1, 5,'foo text 5','2017-01-05', NULL),
-    (1, 6,'foo text 6','2017-01-06', NULL),
-    (1, 7,'foo bar 7','2017-01-07', NULL),
-    (1, 8,'foo text 8','2017-01-08', NULL),
-    (1, 9,'foo text 9','2017-01-09', NULL),
-    (1, 10,'foo text 10','2017-01-10', NULL)
+    (1, 1,'foo bar 1',   '2017-01-01', '2017-01-01 00:00:01', '2017-01-01 00:00:01', '{"a": 1, "b": 10}', array[1,2,3]),
+    (1, 2,'foo text 2',  '2017-01-02', '2017-01-02 00:00:01', '2017-01-02 00:00:01', '{"a": 2, "b": 9}',  array[[1,2], [3,4]]),
+    (1, 3,'foo text 3',  '2017-01-03', '2017-01-03 00:00:01', '2017-01-03 00:00:01', '{"a": 3, "b": 8}',  array['test [brackets]', 'test "[brackets]" in quotes']),
+    (1, 4,'foo text 4',  '2017-01-04', '2017-01-04 00:00:01', '2017-01-04 00:00:01', '{"a": 4, "b": 7}',  NULL),
+    (1, 5,'foo text 5',  '2017-01-05', '2017-01-05 00:00:01', '2017-01-05 00:00:01', '{"a": 5, "b": 6}',  NULL),
+    (1, 6,'foo text 6',  '2017-01-06', '2017-01-06 00:00:01', '2017-01-06 00:00:01', '{"a": 6, "b": 5}',  NULL),
+    (1, 7,'foo bar 7',   '2017-01-07', '2017-01-07 00:00:01', '2017-01-07 00:00:01', '{"a": 7, "b": 4}',  NULL),
+    (1, 8,'foo text 8',  '2017-01-08', '2017-01-08 00:00:01', '2017-01-08 00:00:01', '{"a": 8, "b": 3}',  NULL),
+    (1, 9,'foo text 9',  '2017-01-09', '2017-01-09 00:00:01', '2017-01-09 00:00:01', '{"a": 9, "b": 2}',  NULL),
+    (1, 10,'foo text 10','2017-01-10', '2017-01-10 00:00:01', '2017-01-10 00:00:01', '{"a": 10, "b": 1}', NULL)
 
 RETURNING *;
 
@@ -74,3 +80,7 @@ UNION ALL
 UNION ALL
 (SELECT some_int, some_text, some_date FROM kafka_test_prod_json WHERE offs >= 0 and part=3 AND some_int = 231 LIMIT 1)
 )t;
+
+
+--- check exporting composite types to json format (importing is not yet supported)
+INSERT INTO kafka_test_prod_json (some_custom_type) VALUES ((1, 'test'));
