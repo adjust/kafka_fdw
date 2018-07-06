@@ -24,9 +24,17 @@ SELECT part, offs,  message ~ E'\\d{4},"It\'s some text, that is for number \\d{
     1 |  110 | t
 (11 rows)
 
--- check writing raw data to kafka
+DROP FOREIGN TABLE kafka_test_raw;
+-- check writing raw data to kafka and reading it back
+CREATE FOREIGN TABLE kafka_test_raw (
+    part int OPTIONS (partition 'true'),
+    offs bigint OPTIONS (offset 'true'),
+    message text
+)
+SERVER kafka_server OPTIONS
+    (format 'raw', topic 'contrib_raw', batch_size '30', buffer_delay '100');
 INSERT INTO kafka_test_raw (message) VALUES ('123');
-SELECT message FROM kafka_test_raw WHERE message = '123';
+SELECT message FROM kafka_test_raw;
  message 
 ---------
  123
