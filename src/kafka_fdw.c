@@ -721,6 +721,9 @@ kafkaIterateForeignScan(ForeignScanState *node)
 
     values = palloc0(num_attrs * sizeof(Datum));
     nulls  = palloc0(num_attrs * sizeof(bool));
+    slot->tts_values = values;
+    slot->tts_isnull = nulls;
+
 
     // DEBUGLOG("message: %s", message->payload);
 
@@ -772,27 +775,8 @@ kafkaIterateForeignScan(ForeignScanState *node)
                     appendStringInfoString(&festate->junk_buf, "missing data in Kafka Stream");
             }
         }
-    }
 
-    if (parse_options->format == CUSTOM)
-    {
-        festate->decode(message->payload,
-                        message->len,
-                        values,
-                        nulls,
-                        num_attrs,
-                        kafka_options->partition_attnum - 1,
-                        kafka_options->offset_attnum - 1);
-
-        values[kafka_options->partition_attnum - 1] = Int32GetDatum(message->partition);
-        nulls[kafka_options->partition_attnum - 1]  = false;
-        values[kafka_options->offset_attnum - 1]    = Int64GetDatum(message->offset);
-        nulls[kafka_options->offset_attnum - 1]     = false;
-    }
-
-    /* Loop to read the user attributes on the line. */
-    if (parse_options->format != CUSTOM)
-    {
+        /* Loop to read the user attributes on the line. */
         fldnum = 0;
         foreach (cur, festate->attnumlist)
         {
@@ -883,8 +867,20 @@ kafkaIterateForeignScan(ForeignScanState *node)
         }
     }
 
-    slot->tts_values = values;
-    slot->tts_isnull = nulls;
+    if (parse_options->format == CUSTOM)
+    {
+        festate->decode(message->payload,
+                        message->len,
+                        slot,
+                        kafka_options->partition_attnum - 1,
+                        kafka_options->offset_attnum - 1);
+
+        values[kafka_options->partition_attnum - 1] = Int32GetDatum(message->partition);
+        nulls[kafka_options->partition_attnum - 1]  = false;
+        values[kafka_options->offset_attnum - 1]    = Int64GetDatum(message->offset);
+        nulls[kafka_options->offset_attnum - 1]     = false;
+    }
+
     ExecStoreVirtualTuple(slot);
 
     rd_kafka_message_destroy(message);

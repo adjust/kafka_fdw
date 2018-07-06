@@ -8,3 +8,7 @@ SERVER kafka_server OPTIONS
 
 -- we can only check if the meesaage has a certain pattern as part / offs is not deteministic
 SELECT part, offs,  message ~ E'\\d{4},"It\'s some text, that is for number \\d{4}",\\d{4}-\\d{2}-\\d{2},\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}' FROM kafka_test_raw WHERE part=1 AND offs BETWEEN 100 AND 110 ORDER BY offs;
+
+-- check writing raw data to kafka
+INSERT INTO kafka_test_raw (message) VALUES ('123');
+SELECT message FROM kafka_test_raw WHERE message = '123';

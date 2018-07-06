@@ -185,8 +185,9 @@ typedef struct KafkaFdwPlanState
     int          npart;         /* estimate of number of partitions to scan */
 } KafkaFdwPlanState;
 
-typedef void (
-  *custom_decoder)(char *msg, size_t msg_len, Datum *values, bool *nulls, int num_attr, int part_idx, int offset_idx);
+typedef void (*custom_decoder)(const char *msg, size_t msg_len,
+                               TupleTableSlot *slot,
+                               int part_idx, int offset_idx);
 
 /* holds information about extensible KafkaScanP list */
 typedef struct KafkaScanPData
