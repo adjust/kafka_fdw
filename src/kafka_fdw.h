@@ -244,7 +244,7 @@ typedef struct KafkaFdwModifyState
 
 } KafkaFdwModifyState;
 /* connection.c */
-void KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG]);
+void KafkaFdwGetConnection(KafkaFdwExecutionState *festate);
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 
 /* option.c */

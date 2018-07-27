@@ -125,3 +125,4 @@ SELECT COUNT(*) FROM kafka_test_part WHERE (part = 1 AND offs BETWEEN 1 AND 2) O
 PREPARE kafka_test(int,bigint,bigint, int,bigint,bigint) AS SELECT COUNT(*) FROM kafka_test_part WHERE (part = $1 AND offs BETWEEN $2 AND $3) OR ((part = $4 AND offs BETWEEN $5 AND $6) );
 EXPLAIN (COSTS OFF) EXECUTE kafka_test(1,100,200,1,500,600);
 EXPLAIN (COSTS OFF) EXECUTE kafka_test(1,1,2,1,5,6);
+
