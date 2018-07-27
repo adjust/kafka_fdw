@@ -9,7 +9,7 @@ basically
 */
 
 void
-KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR_MSG])
+KafkaFdwGetConnection(KafkaFdwExecutionState *festate)
 {
     rd_kafka_topic_conf_t *topic_conf         = NULL;
     rd_kafka_t *           kafka_handle       = NULL;
@@ -19,6 +19,7 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
     rd_kafka_resp_err_t    err;
     rd_kafka_conf_t *      conf;
     KafKaPartitionList *   partition_list = NULL;
+    char                   errstr[KAFKA_MAX_ERR_MSG];
 
     /* brokers and topic should be validated just double check */
 
@@ -28,7 +29,6 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
     conf = rd_kafka_conf_new();
 
     kafka_handle       = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
-    kafka_topic_handle = NULL;
 
     if (kafka_handle != NULL)
     {
@@ -54,7 +54,12 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
               (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", k_options.topic)));
 
         kafka_topic_handle = rd_kafka_topic_new(kafka_handle, k_options.topic, topic_conf);
-        topic_conf         = NULL; /* Now owned by kafka_topic_handle */
+        if (!kafka_topic_handle)
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_ERROR),
+                     errmsg_internal("kafka_fdw: Unable to create topic %s", k_options.topic)));
+
+        topic_conf = NULL;  /* Now owned by kafka_topic_handle */
 
         /* Fetch metadata */
         err = rd_kafka_metadata(kafka_handle, 0, kafka_topic_handle, &metadata, 5000);
@@ -65,9 +70,14 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
         if (metadata->topic_cnt != 1)
             elog(ERROR, "%% Surprisingly got %d topics while 1 was expected", metadata->topic_cnt);
 
+        topic = &metadata->topics[0];
+        if (topic->partition_cnt == 0)
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_ERROR),
+                     errmsg_internal("Topic %s has zero partitions", k_options.topic)));
+
         /* Get partitions list for topic */
         partition_list                = palloc(sizeof(KafKaPartitionList));
-        topic                         = &metadata->topics[0];
         partition_list->partition_cnt = topic->partition_cnt;
         partition_list->partitions    = palloc0(partition_list->partition_cnt * sizeof(int32));
 
@@ -80,13 +90,12 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate, char errstr[KAFKA_MAX_ERR
 
         rd_kafka_metadata_destroy(metadata);
     }
-
-    if (kafka_handle == NULL || kafka_topic_handle == NULL || partition_list->partition_cnt == 0)
+    else
     {
-        festate->kafka_handle       = NULL;
-        festate->kafka_topic_handle = NULL;
-        festate->partition_list     = NULL;
-        return;
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
+                 errmsg_internal("kafka_fdw: Unable to connect to %s", k_options.brokers),
+                 errdetail("%s", errstr)));
     }
 
     festate->kafka_handle       = kafka_handle;
