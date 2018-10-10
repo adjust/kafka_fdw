@@ -487,7 +487,7 @@ KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate,
 {
     ListCell *    cur;
     HTAB *        json_hash;
-    int           fieldno     = 0;
+    volatile int  fieldno     = 0;
     int           num_ent     = 0;
     bool          ignore_junk = festate->kafka_options.ignore_junk;
     MemoryContext ccxt        = CurrentMemoryContext;
