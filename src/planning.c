@@ -10,7 +10,8 @@
 void
 KafkaEstimateSize(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw_private)
 {
-    double nrows, nbatches = 0;
+    double nrows = 0,
+           nbatches = 0;
     int    npart = 0;
 
     ListCell *    lc;

@@ -601,7 +601,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     KafkaFdwExecutionState *festate  = (KafkaFdwExecutionState *) node->fdw_state;
     ExprContext *           econtext = node->ss.ps.ps_ExprContext;
     TupleTableSlot *        slot     = node->ss.ss_ScanTupleSlot;
-    rd_kafka_message_t *    message;
+    rd_kafka_message_t *    message  = NULL;  /* keep compiler quiet */
     KafkaOptions *          kafka_options = &festate->kafka_options;
     MemoryContext           ccxt          = CurrentMemoryContext;
     KafkaScanDataDesc *     scand         = festate->scan_data_desc;
@@ -783,7 +783,7 @@ ReadKafkaMessage(Relation rel, KafkaFdwExecutionState *festate,
     TupleDesc tupDesc       = RelationGetDescr(rel);
     Form_pg_attribute *attr = tupDesc->attrs;
     int num_attrs           = list_length(festate->attnumlist);
-    bool catched_error      = false;
+    volatile bool catched_error = false;
 
     Datum *values = palloc0(num_attrs * sizeof(Datum));
     bool *nulls  = palloc0(num_attrs * sizeof(bool));
@@ -1466,17 +1466,17 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
 
     KafkaFdwExecutionState *festate;
     rd_kafka_message_t **messages;
-    int64         total = 0;
-    int           p;
-    int           partnum;
-    int64_t      *low, *high; /* partition bounds */
-    KafkaOptions  kafka_options = { DEFAULT_KAFKA_OPTIONS };
-    ParseOptions  parse_options = { .format = -1 };
-    Datum        *values;
-    bool         *nulls;
-    int           cnt = 0;
-    bool          catched_error = false;
-    char          errstr[KAFKA_MAX_ERR_MSG];
+    int             p;
+    int             partnum;
+    int64_t        *low, *high; /* partition bounds */
+    KafkaOptions    kafka_options = { DEFAULT_KAFKA_OPTIONS };
+    ParseOptions    parse_options = { .format = -1 };
+    Datum          *values;
+    bool           *nulls;
+    char            errstr[KAFKA_MAX_ERR_MSG];
+    volatile bool   catched_error = false;
+    volatile int    cnt = 0;  
+    volatile int64  total = 0;
 
     /* Initialize execution state */
     kafkaGetOptions(RelationGetRelid(relation),
@@ -1516,22 +1516,22 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
     if (total == 0)
         goto finish_acquire_sample;
 
-   /* Allocate memory for batch and tuple data */
+    /* Allocate memory for batch and tuple data */
     messages = palloc(kafka_options.batch_size * sizeof(rd_kafka_message_t *));
-    values = palloc(sizeof(Datum) * RelationGetDescr(relation)->natts);
-    nulls = palloc(sizeof(bool) * RelationGetDescr(relation)->natts);
+    values   = palloc(sizeof(Datum) * RelationGetDescr(relation)->natts);
+    nulls    = palloc(sizeof(bool) * RelationGetDescr(relation)->natts);
 
     /* Get a sample from each partition */
     for (p = 0; p < partnum; p++)
     {
-        MemoryContext oldcontext = CurrentMemoryContext;
-        int64   partrows, rows_to_read, step;
-        int64   offset = low[p];
-        int64   batch_size = kafka_options.batch_size;
-        int     batches;
-        double  share;
-        int     m;
-        bool    done = false;
+        MemoryContext   oldcontext = CurrentMemoryContext;
+        int64           partrows, rows_to_read, step;
+        int64           batch_size = kafka_options.batch_size;
+        int             batches;
+        double          share;
+        volatile int64  offset = low[p];
+        volatile int    m;
+        volatile bool   done = false;
 
         /*
          * Ideally we need to peak individual messages from the partition evenly for
