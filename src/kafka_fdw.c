@@ -36,10 +36,12 @@ static bool kafkaStop(KafkaFdwExecutionState *festate);
 static bool kafkaStart(KafkaFdwExecutionState *festate);
 static bool kafkaNext(KafkaFdwExecutionState *festate);
 
-static void ReadKafkaMessage(Relation rel, KafkaFdwExecutionState *festate,
-                 rd_kafka_message_t *message,
-                 MemoryContext ccxt,
-                 Datum **outvalues, bool **outnulls);
+static void ReadKafkaMessage(Relation                rel,
+                             KafkaFdwExecutionState *festate,
+                             rd_kafka_message_t *    message,
+                             MemoryContext           ccxt,
+                             Datum **                outvalues,
+                             bool **                 outnulls);
 
 static List *kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelation, int subplan_index);
 static void  kafkaBeginForeignModify(ModifyTableState *mtstate,
@@ -59,14 +61,13 @@ static int kafkaIsForeignRelUpdatable(Relation rel);
 
 static char *getJsonAttname(Form_pg_attribute attr, StringInfo buff);
 static int   next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand);
-static bool kafkaAnalyzeForeignTable(Relation relation,
-                         AcquireSampleRowsFunc *func,
-                         BlockNumber *totalpages);
-static int kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
-                           HeapTuple *rows, int targrows,
-                           double *totalrows,
-                           double *totaldeadrows);
-
+static bool  kafkaAnalyzeForeignTable(Relation relation, AcquireSampleRowsFunc *func, BlockNumber *totalpages);
+static int   kafkaAcquireSampleRowsFunc(Relation   relation,
+                                        int        elevel,
+                                        HeapTuple *rows,
+                                        int        targrows,
+                                        double *   totalrows,
+                                        double *   totaldeadrows);
 
 /* parallel execution */
 #ifdef DO_PARALLEL
@@ -160,7 +161,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 #ifdef DO_PARALLEL
     num_workers = Min(fdw_private->npart - 1, max_parallel_workers_per_gather);
 #else
-    num_workers = 0;
+    num_workers                         = 0;
 #endif
 
     relation = relation_open(foreigntableid, AccessShareLock);
@@ -397,11 +398,11 @@ makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOpt
     festate->scan_data    = makeScanPData();
 
     /* we we get a parallel scan_data_desc will point to a shared mem segment by InitializeDSMForeignScan */
-    festate->scan_data_desc              = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
+    festate->scan_data_desc = (KafkaScanDataDesc *) palloc0(sizeof(KafkaScanDataDesc));
 #ifdef DO_PARALLEL
     pg_atomic_init_u32(&festate->scan_data_desc->next_scanp, 0);
 #else
-    festate->scan_data_desc->next_scanp  = 0;
+    festate->scan_data_desc->next_scanp = 0;
 #endif
     /* TODO: memcpy */
     festate->kafka_options = *kafka_options;
@@ -435,8 +436,8 @@ makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOpt
      * the input function), and info about defaults and constraints. (Which
      * input function we use depends on text/binary format choice.)
      */
-    in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
-    typioparams  = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
+    in_functions        = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
+    typioparams         = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
     festate->attisarray = NULL;
 
     for (attnum = 1; attnum <= num_phys_attrs; attnum++)
@@ -498,7 +499,7 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
     }
 
     /* setup execution state */
-    festate = makeKafkaExecutionState(node->ss.ss_currentRelation, &kafka_options, &parse_options);
+    festate         = makeKafkaExecutionState(node->ss.ss_currentRelation, &kafka_options, &parse_options);
     node->fdw_state = (void *) festate;
 
     /*
@@ -547,7 +548,7 @@ static char *
 transform_json_array(char *string)
 {
     char *s;
-    bool in_quote = false;
+    bool  in_quote = false;
 
     for (s = string; *s != '\0'; s++)
     {
@@ -557,12 +558,10 @@ transform_json_array(char *string)
             {
                 case '[': *s = '{'; break;
                 case ']': *s = '}'; break;
-                case '\"':
-                    in_quote = true;
-                    break;
+                case '\"': in_quote = true; break;
             }
         }
-        else  /* ignore symbols under quotation */
+        else /* ignore symbols under quotation */
         {
             switch (*s)
             {
@@ -598,10 +597,10 @@ kafkaIterateForeignScan(ForeignScanState *node)
 {
     // DEBUGLOG("%s", __func__);
 
-    KafkaFdwExecutionState *festate  = (KafkaFdwExecutionState *) node->fdw_state;
-    ExprContext *           econtext = node->ss.ps.ps_ExprContext;
-    TupleTableSlot *        slot     = node->ss.ss_ScanTupleSlot;
-    rd_kafka_message_t *    message  = NULL;  /* keep compiler quiet */
+    KafkaFdwExecutionState *festate       = (KafkaFdwExecutionState *) node->fdw_state;
+    ExprContext *           econtext      = node->ss.ps.ps_ExprContext;
+    TupleTableSlot *        slot          = node->ss.ss_ScanTupleSlot;
+    rd_kafka_message_t *    message       = NULL; /* keep compiler quiet */
     KafkaOptions *          kafka_options = &festate->kafka_options;
     MemoryContext           ccxt          = CurrentMemoryContext;
     KafkaScanDataDesc *     scand         = festate->scan_data_desc;
@@ -760,12 +759,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
         }
     }
 
-    ReadKafkaMessage(node->ss.ss_currentRelation,
-                     festate,
-                     message,
-                     ccxt,
-                     &slot->tts_values,
-                     &slot->tts_isnull);
+    ReadKafkaMessage(node->ss.ss_currentRelation, festate, message, ccxt, &slot->tts_values, &slot->tts_isnull);
     ExecStoreVirtualTuple(slot);
 
     rd_kafka_message_destroy(message);
@@ -775,29 +769,30 @@ kafkaIterateForeignScan(ForeignScanState *node)
 }
 
 static void
-ReadKafkaMessage(Relation rel, KafkaFdwExecutionState *festate,
-                 rd_kafka_message_t *message,
-                 MemoryContext ccxt,
-                 Datum **outvalues, bool **outnulls)
+ReadKafkaMessage(Relation                rel,
+                 KafkaFdwExecutionState *festate,
+                 rd_kafka_message_t *    message,
+                 MemoryContext           ccxt,
+                 Datum **                outvalues,
+                 bool **                 outnulls)
 {
-    TupleDesc tupDesc       = RelationGetDescr(rel);
-    Form_pg_attribute *attr = tupDesc->attrs;
-    int num_attrs           = list_length(festate->attnumlist);
-    volatile bool catched_error = false;
+    TupleDesc          tupDesc       = RelationGetDescr(rel);
+    Form_pg_attribute *attr          = tupDesc->attrs;
+    int                num_attrs     = list_length(festate->attnumlist);
+    volatile bool      catched_error = false;
 
     Datum *values = palloc0(num_attrs * sizeof(Datum));
-    bool *nulls  = palloc0(num_attrs * sizeof(bool));
+    bool * nulls  = palloc0(num_attrs * sizeof(bool));
 
     ParseOptions *parse_options = &festate->parse_options;
     KafkaOptions *kafka_options = &festate->kafka_options;
-    bool error = false;
-    int fldct, fldnum;
-    ListCell *cur;
+    bool          error         = false;
+    int           fldct, fldnum;
+    ListCell *    cur;
 
     // DEBUGLOG("message: %s", message->payload);
 
-    fldct = KafkaReadAttributes((char *) message->payload, message->len, festate,
-                                parse_options->format, &error);
+    fldct = KafkaReadAttributes((char *) message->payload, message->len, festate, parse_options->format, &error);
 
     /* unterminated quote, total junk */
     if (error && parse_options->format == CSV)
@@ -938,7 +933,7 @@ ReadKafkaMessage(Relation rel, KafkaFdwExecutionState *festate,
     }
 
     *outvalues = values;
-    *outnulls = nulls;
+    *outnulls  = nulls;
 }
 
 /*
@@ -1000,7 +995,7 @@ next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand)
 #ifdef DO_PARALLEL
     next = pg_atomic_fetch_add_u32(&scand->next_scanp, 1);
 #else
-    next = scand->next_scanp++;
+    next                                = scand->next_scanp++;
 #endif
 
     if (next >= scan_p->len)
@@ -1027,7 +1022,8 @@ kafkaStop(KafkaFdwExecutionState *festate)
         rd_kafka_resp_err_t err = rd_kafka_last_error();
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_ERROR),
-                 errmsg_internal("kafka_fdw: Failed to stop consuming: %s", rd_kafka_err2str(err))));
+                 errmsg_internal(
+                   "kafka_fdw: Failed to stop consuming partition %d:  %s", scan_p->partition, rd_kafka_err2str(err))));
     }
 
     /* release unconsumed messages */
@@ -1440,9 +1436,7 @@ getJsonAttname(Form_pg_attribute attr, StringInfo buff)
  *      ANALYZE support
  */
 static bool
-kafkaAnalyzeForeignTable(Relation relation,
-                         AcquireSampleRowsFunc *func,
-                         BlockNumber *totalpages)
+kafkaAnalyzeForeignTable(Relation relation, AcquireSampleRowsFunc *func, BlockNumber *totalpages)
 {
     *func = kafkaAcquireSampleRowsFunc;
     return true;
@@ -1453,56 +1447,54 @@ kafkaAnalyzeForeignTable(Relation relation,
  *      Extract sample rows for ANALYZE purposes.
  */
 static int
-kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
-                           HeapTuple *rows, int targrows,
-                           double *totalrows,
-                           double *totaldeadrows)
+kafkaAcquireSampleRowsFunc(Relation   relation,
+                           int        elevel,
+                           HeapTuple *rows,
+                           int        targrows,
+                           double *   totalrows,
+                           double *   totaldeadrows)
 {
-#define STORE_ERROR(...) \
-    do { \
-        snprintf(errstr, KAFKA_MAX_ERR_MSG, __VA_ARGS__); \
-        catched_error = true; \
+#define STORE_ERROR(...)                                                                                               \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        snprintf(errstr, KAFKA_MAX_ERR_MSG, __VA_ARGS__);                                                              \
+        catched_error = true;                                                                                          \
     } while (0)
 
     KafkaFdwExecutionState *festate;
-    rd_kafka_message_t **messages;
-    int             p;
-    int             partnum;
-    int64_t        *low, *high; /* partition bounds */
-    KafkaOptions    kafka_options = { DEFAULT_KAFKA_OPTIONS };
-    ParseOptions    parse_options = { .format = -1 };
-    Datum          *values;
-    bool           *nulls;
-    char            errstr[KAFKA_MAX_ERR_MSG];
-    volatile bool   catched_error = false;
-    volatile int    cnt = 0;  
-    volatile int64  total = 0;
+    rd_kafka_message_t **   messages;
+    int                     p;
+    int                     partnum;
+    int64_t *               low, *high; /* partition bounds */
+    KafkaOptions            kafka_options = { DEFAULT_KAFKA_OPTIONS };
+    ParseOptions            parse_options = { .format = -1 };
+    Datum *                 values;
+    bool *                  nulls;
+    char                    errstr[KAFKA_MAX_ERR_MSG];
+    volatile bool           catched_error = false;
+    volatile int            cnt           = 0;
+    volatile int64          total         = 0;
 
     /* Initialize execution state */
-    kafkaGetOptions(RelationGetRelid(relation),
-                    &kafka_options,
-                    &parse_options);
+    kafkaGetOptions(RelationGetRelid(relation), &kafka_options, &parse_options);
     festate = makeKafkaExecutionState(relation, &kafka_options, &parse_options);
 
     /* Establish connection */
-    KafkaFdwGetConnection(festate);   
+    KafkaFdwGetConnection(festate);
     partnum = festate->partition_list->partition_cnt;
 
     /* Allocate memory for partition bounds */
-    low = palloc(sizeof(int64_t) * partnum);
+    low  = palloc(sizeof(int64_t) * partnum);
     high = palloc(sizeof(int64_t) * partnum);
 
     /* Obtain lower and upper bounds for partitions */
     for (p = 0; p < partnum; p++)
     {
-        rd_kafka_resp_err_t    err;
+        rd_kafka_resp_err_t err;
 
-        err = rd_kafka_query_watermark_offsets(festate->kafka_handle,
-                                               festate->kafka_options.topic, p,
-                                               &low[p], &high[p],
-                                               WARTERMARK_TIMEOUT);
-        if (err != RD_KAFKA_RESP_ERR_NO_ERROR && 
-            err != RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION)
+        err = rd_kafka_query_watermark_offsets(
+          festate->kafka_handle, festate->kafka_options.topic, p, &low[p], &high[p], WARTERMARK_TIMEOUT);
+        if (err != RD_KAFKA_RESP_ERR_NO_ERROR && err != RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION)
         {
             STORE_ERROR("Failed to get watermarks %s", rd_kafka_err2str(err));
             goto finish_acquire_sample;
@@ -1510,7 +1502,7 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
         total += high[p] - low[p];
     }
     *totaldeadrows = 0;
-    *totalrows = total;
+    *totalrows     = total;
 
     /* Empty topic */
     if (total == 0)
@@ -1524,14 +1516,14 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
     /* Get a sample from each partition */
     for (p = 0; p < partnum; p++)
     {
-        MemoryContext   oldcontext = CurrentMemoryContext;
-        int64           partrows, rows_to_read, step;
-        int64           batch_size = kafka_options.batch_size;
-        int             batches;
-        double          share;
-        volatile int64  offset = low[p];
-        volatile int    m;
-        volatile bool   done = false;
+        MemoryContext  oldcontext = CurrentMemoryContext;
+        int64          partrows, rows_to_read, step;
+        int64          batch_size = kafka_options.batch_size;
+        int            batches;
+        double         share;
+        volatile int64 offset = low[p];
+        volatile int   m;
+        volatile bool  done = false;
 
         /*
          * Ideally we need to peak individual messages from the partition evenly for
@@ -1541,13 +1533,13 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
          * Calculate how many batches should we read from this partition and how big
          * steps between those batches should be.
          */
-        partrows     = high[p] - low[p];           /* rows in current partition */
+        partrows     = high[p] - low[p]; /* rows in current partition */
         share        = partrows / (double) total;
-        rows_to_read = share * targrows;           /* rows to read from partition */
-        batches      = rows_to_read / batch_size;  /* batches number to read */
+        rows_to_read = share * targrows;          /* rows to read from partition */
+        batches      = rows_to_read / batch_size; /* batches number to read */
         if (batches <= 0)
             continue;
-        step         = batch_size + (partrows - rows_to_read) / batches;
+        step = batch_size + (partrows - rows_to_read) / batches;
 
         /* Restrict the minimum step size */
         if (step < batch_size * STEP_FACTOR)
@@ -1567,11 +1559,9 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
             }
 
             /* Read next batch */
-            rows_fetched = rd_kafka_consume_batch(festate->kafka_topic_handle,
-                                                  p,
-                                                  kafka_options.buffer_delay,
-                                                  messages, batch_size);
-           /* Not empty dataset obtained */
+            rows_fetched =
+              rd_kafka_consume_batch(festate->kafka_topic_handle, p, kafka_options.buffer_delay, messages, batch_size);
+            /* Not empty dataset obtained */
             if (rows_fetched > 0)
             {
                 PG_TRY();
@@ -1582,19 +1572,15 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
 
                         if (err == RD_KAFKA_RESP_ERR_NO_ERROR)
                         {
-                            ReadKafkaMessage(relation, festate,
-                                             messages[m],
-                                             CurrentMemoryContext,
-                                             &values, &nulls);
+                            ReadKafkaMessage(relation, festate, messages[m], CurrentMemoryContext, &values, &nulls);
 
                             Assert(cnt <= targrows);
-                            rows[cnt++] = heap_form_tuple(RelationGetDescr(relation),
-                                                          values, nulls);
+                            rows[cnt++] = heap_form_tuple(RelationGetDescr(relation), values, nulls);
                         }
                         else if (err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
                         {
                             elog(LOG, "kafka_fdw has reached the end of the queue");
-                            done = true;   /* finish scan for this partition */
+                            done = true; /* finish scan for this partition */
                             break;
                         }
                         else if (err != RD_KAFKA_RESP_ERR_NO_ERROR)
@@ -1648,7 +1634,7 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
 
                 STORE_ERROR("Failed to stop consuming: %s", rd_kafka_err2str(err));
             }
- 
+
             if (catched_error)
                 goto finish_acquire_sample;
 
@@ -1657,13 +1643,13 @@ kafkaAcquireSampleRowsFunc(Relation relation, int elevel,
                 break;
 
             offset += step;
-        }  /* iterate over batches */
-    }  /* iterate over partitions */
- 
+        } /* iterate over batches */
+    }     /* iterate over partitions */
+
 finish_acquire_sample:
     /* Finalize connection and quit */
-    kafkaCloseConnection(festate); 
-    
+    kafkaCloseConnection(festate);
+
     /* Propagate error if any */
     if (catched_error)
         ereport(ERROR, (errcode(ERRCODE_FDW_ERROR), errmsg_internal("%s", errstr)));
@@ -1693,7 +1679,7 @@ kafkaInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt, voi
     KafkaScanDataDesc *     scand   = (KafkaScanDataDesc *) coordinate;
     KafkaFdwExecutionState *festate = (KafkaFdwExecutionState *) node->fdw_state;
 
-    scand->ps_relid                 = RelationGetRelid(node->ss.ss_currentRelation);
+    scand->ps_relid = RelationGetRelid(node->ss.ss_currentRelation);
     pg_atomic_write_u32(&scand->next_scanp, 0);
     festate->scan_data_desc = scand;
 }
