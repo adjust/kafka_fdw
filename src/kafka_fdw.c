@@ -606,6 +606,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     KafkaScanDataDesc *     scand         = festate->scan_data_desc;
     int                     param_num     = 0;
     KafkaScanP *            scan_p;
+    MemoryContext           oldcontext;
 
     /* first run eval expressions and setup working list */
     if (festate->scan_data->len == 0)
@@ -618,9 +619,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
          */
         if (list_length(festate->exec_exprs) > 0)
         {
-            MemoryContext oldcontext;
             ListCell *    lc_exp;
-            oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
 
             foreach (lc_exp, festate->exec_exprs)
             {
@@ -628,15 +627,17 @@ kafkaIterateForeignScan(ForeignScanState *node)
                   KafkaExecEvalExpr((ExprState *) lfirst(lc_exp), econtext, &festate->param_values[param_num].is_null);
                 param_num++;
             }
-            MemoryContextSwitchTo(oldcontext);
         }
 
+        /* allocate partitions array in query-lifespan context */
+        oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
         KafkaFlattenScanlist(festate->scanop_list,
                              festate->partition_list,
                              kafka_options->batch_size,
                              festate->param_values,
                              param_num,
                              festate->scan_data);
+        MemoryContextSwitchTo(oldcontext);
 
         /*
          * grap the next work item
