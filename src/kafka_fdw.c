@@ -1010,12 +1010,13 @@ kafkaStop(KafkaFdwExecutionState *festate)
 
     KafkaScanP *       scan_p;
     KafkaScanDataDesc *scand = festate->scan_data_desc;
+    KafkaScanPData    *scan_data = festate->scan_data;
 
     DEBUGLOG("%s", __func__);
-    if (festate->scan_data->cursor == -1)
+    if (scan_data->cursor == -1 || scan_data->len == 0)
         return false;
 
-    scan_p = &festate->scan_data->data[festate->scan_data->cursor];
+    scan_p = &scan_data->data[scan_data->cursor];
 
     if (rd_kafka_consume_stop(festate->kafka_topic_handle, scan_p->partition) == -1)
     {
@@ -1037,9 +1038,9 @@ kafkaStop(KafkaFdwExecutionState *festate)
         festate->buffer_cursor++;
     }
 
-    festate->scan_data->cursor = next_work(festate->scan_data, scand);
+    scan_data->cursor = next_work(scan_data, scand);
 
-    if (festate->scan_data->cursor >= 0)
+    if (scan_data->cursor >= 0)
         return true;
     else
         return false;
