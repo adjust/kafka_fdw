@@ -630,7 +630,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
         }
 
         /* allocate partitions array in query-lifespan context */
-        oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
+        oldcontext = MemoryContextSwitchTo(TopTransactionContext);
         KafkaFlattenScanlist(festate->scanop_list,
                              festate->partition_list,
                              kafka_options->batch_size,
