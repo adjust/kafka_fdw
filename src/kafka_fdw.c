@@ -964,8 +964,18 @@ kafkaEndForeignScan(ForeignScanState *node)
     if (festate == NULL)
         return;
 
-    /* Stop consuming */
-    kafkaStop(festate);
+    PG_TRY();
+    {
+        /* Stop consuming */
+        kafkaStop(festate);
+    }
+    PG_CATCH();
+    {
+        /* release librdkafka's resources or error */
+        kafkaCloseConnection(festate);
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
 
     // MemoryContextReset(festate->batch_cxt);
     kafkaCloseConnection(festate);
