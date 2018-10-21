@@ -1,5 +1,4 @@
 #!/bin/bash
-: ${PG_PORT:=5432}
 : ${KAFKA_PRODUCER:="/usr/local/bin/kafka-console-producer"}
 : ${KAFKA_TOPICS:="/usr/local/bin/kafka-topics"}
 
@@ -39,9 +38,9 @@ for t in "${topics[@]}"; do $KAFKA_TOPICS --zookeeper localhost:2181 --delete --
 for t in "${toppart[@]}"; do $KAFKA_TOPICS --zookeeper localhost:2181 --create ${t} --replication-factor 1 & done; wait
 
 # write some test data to topicc
-$BIN/psql -c "COPY(SELECT json_build_object('int_val',int_val, 'text_val',text_val, 'date_val',date_val, 'time_val', time_val ) FROM (${out_sql}) t) TO STDOUT (FORMAT TEXT);" -d postgres -p $PG_PORT -o "| ${kafka_cmd} ${json_topic}" >/dev/null &
+$BIN/psql -c "COPY(SELECT json_build_object('int_val',int_val, 'text_val',text_val, 'date_val',date_val, 'time_val', time_val ) FROM (${out_sql}) t) TO STDOUT (FORMAT TEXT);" -d postgres -o "| ${kafka_cmd} ${json_topic}" >/dev/null &
 
-for t in contrib_regress contrib_regress4; do $BIN/psql -c "COPY(${out_sql}) TO STDOUT (FORMAT CSV);" -d postgres -p $PG_PORT -o "| ${kafka_cmd} ${t}" >/dev/null & done; wait
+for t in contrib_regress contrib_regress4; do $BIN/psql -c "COPY(${out_sql}) TO STDOUT (FORMAT CSV);" -d postgres -o "| ${kafka_cmd} ${t}" >/dev/null & done; wait
 
 
 $kafka_cmd contrib_regress_junk <<-EOF
