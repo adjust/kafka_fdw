@@ -59,10 +59,10 @@ SELECT COUNT(*) FROM kafka_test_prod WHERE offs >= 0 and part=3
 )t;
 
 --- check auto distribution makes sense
-SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=0;
-SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=1;
-SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=2;
-SELECT COUNT(*) BETWEEN 150 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=3;
+SELECT COUNT(*) BETWEEN 120 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=0;
+SELECT COUNT(*) BETWEEN 120 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=1;
+SELECT COUNT(*) BETWEEN 120 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=2;
+SELECT COUNT(*) BETWEEN 120 AND 350 FROM kafka_test_prod WHERE offs >= 0 and part=3;
 
 
 --- check data is readable
