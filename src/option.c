@@ -427,7 +427,7 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
     /* Retrieve FDW options for all user-defined attributes. */
     for (attnum = 1; attnum <= natts; attnum++)
     {
-        Form_pg_attribute attr = tupleDesc->attrs[attnum - 1];
+        Form_pg_attribute attr = TupleDescAttr(tupleDesc, attnum - 1);
         List *            options;
         ListCell *        lc;
         kafka_options->num_parse_col++;

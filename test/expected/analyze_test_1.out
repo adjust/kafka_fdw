@@ -21,7 +21,7 @@ ERROR:  unrecognized configuration parameter "max_parallel_workers_per_gather"
 EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 50;
                                    QUERY PLAN                                    
 ---------------------------------------------------------------------------------
- Foreign Scan on kafka_analyze_json  (cost=100.00..13683.33 rows=100000 width=0)
+ Foreign Scan on kafka_analyze_json  (cost=100.00..23683.33 rows=100000 width=0)
    Filter: (some_int < 50)
    Kafka topic: contrib_regress_json
    scanning: PARTITION >= 0 AND OFFSET >= 0
@@ -30,7 +30,7 @@ EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 50;
 EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 500;
                                    QUERY PLAN                                    
 ---------------------------------------------------------------------------------
- Foreign Scan on kafka_analyze_json  (cost=100.00..13683.33 rows=100000 width=0)
+ Foreign Scan on kafka_analyze_json  (cost=100.00..23683.33 rows=100000 width=0)
    Filter: (some_int < 500)
    Kafka topic: contrib_regress_json
    scanning: PARTITION >= 0 AND OFFSET >= 0
@@ -39,7 +39,7 @@ EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 500;
 EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int > 50000;
                                    QUERY PLAN                                    
 ---------------------------------------------------------------------------------
- Foreign Scan on kafka_analyze_json  (cost=100.00..13683.33 rows=100000 width=0)
+ Foreign Scan on kafka_analyze_json  (cost=100.00..23683.33 rows=100000 width=0)
    Filter: (some_int > 50000)
    Kafka topic: contrib_regress_json
    scanning: PARTITION >= 0 AND OFFSET >= 0
@@ -50,7 +50,7 @@ ANALYZE kafka_analyze_json;
 EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 50;
                                 QUERY PLAN                                 
 ---------------------------------------------------------------------------
- Foreign Scan on kafka_analyze_json  (cost=100.00..101.36 rows=10 width=0)
+ Foreign Scan on kafka_analyze_json  (cost=100.00..102.36 rows=10 width=0)
    Filter: (some_int < 50)
    Kafka topic: contrib_regress_json
    scanning: PARTITION >= 0 AND OFFSET >= 0
@@ -59,7 +59,7 @@ EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 50;
 EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 500;
                                 QUERY PLAN                                 
 ---------------------------------------------------------------------------
- Foreign Scan on kafka_analyze_json  (cost=100.00..110.87 rows=80 width=0)
+ Foreign Scan on kafka_analyze_json  (cost=100.00..118.87 rows=80 width=0)
    Filter: (some_int < 500)
    Kafka topic: contrib_regress_json
    scanning: PARTITION >= 0 AND OFFSET >= 0
@@ -68,7 +68,7 @@ EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 500;
 EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int > 50000;
                                    QUERY PLAN                                   
 --------------------------------------------------------------------------------
- Foreign Scan on kafka_analyze_json  (cost=100.00..12982.43 rows=94840 width=0)
+ Foreign Scan on kafka_analyze_json  (cost=100.00..22466.43 rows=94840 width=0)
    Filter: (some_int > 50000)
    Kafka topic: contrib_regress_json
    scanning: PARTITION >= 0 AND OFFSET >= 0
