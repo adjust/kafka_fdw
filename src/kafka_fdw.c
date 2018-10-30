@@ -2,6 +2,7 @@
 #include "compatibility.h"
 #include "parser/parsetree.h"
 #include "storage/spin.h"
+#include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
@@ -9,6 +10,13 @@ PG_MODULE_MAGIC;
 
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
 #define STEP_FACTOR 20
+
+double kafka_tuple_cost = 0.2f;
+
+/*
+ * Module load callback
+ */
+void   _PG_init(void);
 
 /*
  * FDW callback routines
@@ -79,6 +87,29 @@ static void kafkaInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *to
 static void kafkaShutdownForeignScan(ForeignScanState *node);
 static void kafkaGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid);
 #endif
+
+
+/*
+ * Module load callback
+ */
+void
+_PG_init(void)
+{
+	/* Define custom GUC variables. */
+	DefineCustomRealVariable("kafka_fdw.tuple_cost",
+							 "Kafka tuple cost.",
+							 "Valid range is 0.0 .. 1.0.",
+							 &kafka_tuple_cost,
+							 0.2,
+							 0.0,
+							 1.0,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+}
+
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -153,7 +184,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     KafkaFdwPlanState *fdw_private = (KafkaFdwPlanState *) baserel->fdw_private;
     Cost               startup_cost, total_cost, run_cost;
     Relation           relation;
-    ForeignPath *      foreign_path;
+    Path *             foreign_path;
     int                num_workers;
 
     DEBUGLOG("%s", __func__);
@@ -161,7 +192,7 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 #ifdef DO_PARALLEL
     num_workers = Min(fdw_private->npart - 1, max_parallel_workers_per_gather);
 #else
-    num_workers                         = 0;
+    num_workers = 0;
 #endif
 
     relation = relation_open(foreigntableid, AccessShareLock);
@@ -170,33 +201,64 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     KafkaEstimateCosts(root, baserel, fdw_private, &startup_cost, &total_cost, &run_cost);
 
     relation_close(relation, AccessShareLock);
+
     /*
      * Create a ForeignPath node and add it as only possible path.  We use the
      * fdw_private list of the path to carry the convert_selectively option;
      * it will be propagated into the fdw_private list of the Plan node.
      */
-
-    foreign_path = kafka_create_foreignscan_path(root,
-                                                 baserel,
-                                                 NULL, /* default pathtarget */
-                                                 baserel->rows,
-                                                 startup_cost,
-                                                 total_cost,
-                                                 NIL,  /* no pathkeys */
-                                                 NULL, /* no outer rel either */
-                                                 NULL, /* no extra plan */
-                                                 NIL);
+    foreign_path = (Path *)
+        kafka_create_foreignscan_path(root,
+                                      baserel,
+                                      NULL, /* default pathtarget */
+                                      baserel->rows,
+                                      startup_cost,
+                                      total_cost,
+                                      NIL,  /* no pathkeys */
+                                      NULL, /* no outer rel either */
+                                      NULL, /* no extra plan */
+                                      NIL);
 #ifdef DO_PARALLEL
     /* Cannot add parameterized path as partial path */
     if (num_workers > 0 && baserel->consider_parallel)
     {
-        KafkaSetParallelPath((Path *) foreign_path, num_workers, startup_cost, total_cost, run_cost);
-        add_partial_path(baserel, (Path *) foreign_path);
+        Path *partial_path;
+
+        /* Create partial path that will be wrapped in gather node later */
+        partial_path = (Path *)
+            kafka_create_foreignscan_path(root,
+                                          baserel,
+                                          NULL, /* default pathtarget */
+                                          baserel->rows,
+                                          startup_cost,
+                                          total_cost,
+                                          NIL,  /* no pathkeys */
+                                          NULL, /* no outer rel either */
+                                          NULL, /* no extra plan */
+                                          NIL);
+        KafkaSetParallelPath((Path *) partial_path, num_workers, startup_cost, total_cost, run_cost);
+        add_partial_path(baserel, (Path *) partial_path);
+
+        /*
+         * Up until postgres 11 we could just return here and have partial path
+         * be choosen. Since 11 it's not possible as the gather node generation
+         * was moved to the later stage and we need at least some non-partial
+         * path added in case to proceed.
+         */
+#if PG_VERSION_NUM < 110000
         return;
+#else
+        /*
+         * If there is no statistics then just ignore foreign path by making
+         * its cost too big.
+         */
+        if (!baserel->tuples)
+            foreign_path->total_cost += disable_cost;
+#endif
     }
 #endif
 
-    add_path(baserel, (Path *) foreign_path);
+    add_path(baserel, foreign_path);
 }
 
 /*
@@ -383,7 +445,6 @@ static KafkaFdwExecutionState *
 makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOptions *parse_options)
 {
     KafkaFdwExecutionState *festate;
-    Form_pg_attribute *     attr;
     AttrNumber              num_phys_attrs;
     FmgrInfo *              in_functions;
     Oid *                   typioparams;
@@ -416,7 +477,6 @@ makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOpt
         initStringInfo(&festate->junk_buf);
 
     tupDesc        = RelationGetDescr(relation);
-    attr           = tupDesc->attrs;
     num_phys_attrs = tupDesc->natts;
 
     /* allocate enough space for fields */
@@ -442,20 +502,22 @@ makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOpt
 
     for (attnum = 1; attnum <= num_phys_attrs; attnum++)
     {
+        FormData_pg_attribute *attr = TupleDescAttr(tupDesc, attnum - 1);
+
         /* We don't need info for dropped attributes */
-        if (attr[attnum - 1]->attisdropped)
+        if (attr->attisdropped)
             continue;
 
         attnums = lappend_int(attnums, attnum);
 
         /* Fetch the input function and typioparam info */
-        getTypeInputInfo(attr[attnum - 1]->atttypid, &in_func_oid, &typioparams[attnum - 1]);
+        getTypeInputInfo(attr->atttypid, &in_func_oid, &typioparams[attnum - 1]);
         fmgr_info(in_func_oid, &in_functions[attnum - 1]);
 
         if (parse_options->format == JSON)
         {
-            festate->attnames[attnum - 1] = getJsonAttname(attr[attnum - 1], &festate->attname_buf);
-            if (type_is_array(attr[attnum - 1]->atttypid))
+            festate->attnames[attnum - 1] = getJsonAttname(attr, &festate->attname_buf);
+            if (type_is_array(attr->atttypid))
                 festate->attisarray = bms_add_member(festate->attisarray, attnum - 1);
         }
     }
@@ -777,7 +839,6 @@ ReadKafkaMessage(Relation                rel,
                  bool **                 outnulls)
 {
     TupleDesc          tupDesc       = RelationGetDescr(rel);
-    Form_pg_attribute *attr          = tupDesc->attrs;
     int                num_attrs     = list_length(festate->attnumlist);
     volatile bool      catched_error = false;
 
@@ -846,6 +907,7 @@ ReadKafkaMessage(Relation                rel,
         int   attnum = lfirst_int(cur);
         int   m      = attnum - 1;
         char *string;
+        Form_pg_attribute attr = TupleDescAttr(tupDesc, m);
 
         if (attnum == kafka_options->junk_attnum || attnum == kafka_options->junk_error_attnum)
         {
@@ -887,7 +949,7 @@ ReadKafkaMessage(Relation                rel,
             PG_TRY();
             {
                 values[m] =
-                  InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
+                  InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr->atttypmod);
                 nulls[m] = false;
             }
             PG_CATCH();
@@ -914,7 +976,7 @@ ReadKafkaMessage(Relation                rel,
             continue;
         }
 
-        values[m] = InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr[m]->atttypmod);
+        values[m] = InputFunctionCall(&festate->in_functions[m], string, festate->typioparams[m], attr->atttypmod);
         nulls[m]  = false;
     }
 
@@ -995,7 +1057,7 @@ next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand)
 #ifdef DO_PARALLEL
     next = pg_atomic_fetch_add_u32(&scand->next_scanp, 1);
 #else
-    next                                = scand->next_scanp++;
+    next = scand->next_scanp++;
 #endif
 
     if (next >= scan_p->len)
@@ -1112,7 +1174,7 @@ kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelatio
 
     for (attnum = 1; attnum <= tupdesc->natts; attnum++)
     {
-        Form_pg_attribute attr = tupdesc->attrs[attnum - 1];
+        Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
 
         if (!attr->attisdropped)
             targetAttrs = lappend_int(targetAttrs, attnum);
@@ -1226,7 +1288,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
         else
         {
 
-            Form_pg_attribute attr = RelationGetDescr(rel)->attrs[attnum - 1];
+            Form_pg_attribute attr = TupleDescAttr(RelationGetDescr(rel), attnum - 1);
             Assert(!attr->attisdropped);
 
             getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);

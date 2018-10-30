@@ -1,5 +1,9 @@
 #include "kafka_fdw.h"
 
+
+extern double kafka_tuple_cost;
+
+
 /*
  * Estimate size of a foreign table.
  *
@@ -47,7 +51,7 @@ KafkaEstimateSize(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw
                                    0,
                                    JOIN_INNER,
                                    NULL);
-        npart = 1;  /* can't get it from statistics */
+        npart = kafka_options->num_partitions;  /* can't get it from statistics */
     }
     /* No statistics, try to guess */
     else
@@ -104,7 +108,7 @@ KafkaEstimateCosts(PlannerInfo *      root,
     *run_cost = seq_page_cost * nbatches;
 
     *startup_cost = 100;
-    cpu_per_tuple = cpu_tuple_cost * 10 + baserel->baserestrictcost.per_tuple;
+    cpu_per_tuple = kafka_tuple_cost + baserel->baserestrictcost.per_tuple;
     *run_cost += cpu_per_tuple * ntuples;
     *total_cost = *startup_cost + *run_cost;
     DEBUGLOG("startup cost: %f, total_cost: %f, cpu_per_tuple: %f", *startup_cost, *total_cost, cpu_per_tuple);
