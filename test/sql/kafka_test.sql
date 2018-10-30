@@ -26,8 +26,8 @@ DECLARE
 BEGIN
     FOR rec IN SELECT * FROM explain(query) as e(t text)
     LOOP
-        IF position('Planning time' in rec.t) > 0 OR
-           position('Execution time' in rec.t) > 0
+        IF position('planning time' in lower(rec.t)) > 0 OR
+           position('execution time' in lower(rec.t)) > 0
         THEN
             CONTINUE;
         END IF;
