@@ -183,7 +183,6 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
 {
     KafkaFdwPlanState *fdw_private = (KafkaFdwPlanState *) baserel->fdw_private;
     Cost               startup_cost, total_cost, run_cost;
-    Relation           relation;
     Path *             foreign_path;
     int                num_workers;
 
@@ -195,18 +194,9 @@ kafkaGetForeignPaths(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntableid)
     num_workers = 0;
 #endif
 
-    relation = relation_open(foreigntableid, AccessShareLock);
-
     /* Estimate costs */
     KafkaEstimateCosts(root, baserel, fdw_private, &startup_cost, &total_cost, &run_cost);
 
-    relation_close(relation, AccessShareLock);
-
-    /*
-     * Create a ForeignPath node and add it as only possible path.  We use the
-     * fdw_private list of the path to carry the convert_selectively option;
-     * it will be propagated into the fdw_private list of the Plan node.
-     */
     foreign_path = (Path *)
         kafka_create_foreignscan_path(root,
                                       baserel,
