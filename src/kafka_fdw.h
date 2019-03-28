@@ -125,11 +125,11 @@ typedef struct KafkaScanP
     int64 offset_lim;
 } KafkaScanP;
 
-typedef struct KafKaPartitionList
+typedef struct KafkaPartitionList
 {
     int32  partition_cnt;
     int32 *partitions;
-} KafKaPartitionList;
+} KafkaPartitionList;
 
 typedef struct KafkaOptions
 {
@@ -213,7 +213,7 @@ typedef struct KafkaFdwExecutionState
     List *               scanop_list;        /* list of KafkaScanOpP to scan */
     List *               exec_exprs;         /* expressions to evaluate */
     KafkaParamValue *    param_values;       /* param_value List matching exec_expr */
-    KafKaPartitionList * partition_list;     /* list and count of partitions */
+    KafkaPartitionList * partition_list;     /* list and count of partitions */
     KafkaScanPData *     scan_data;          /* scan data list  */
     StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
     char **              attnames;           /* pointer into attname_buf */
@@ -244,15 +244,21 @@ typedef struct KafkaFdwModifyState
 
 } KafkaFdwModifyState;
 /* connection.c */
-void KafkaFdwGetConnection(KafkaFdwExecutionState *festate);
+void KafkaFdwGetConnection(KafkaOptions *k_options,
+                           rd_kafka_t **kafka_handle,
+                           rd_kafka_topic_t **kafka_topic_handle);
+
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 
 /* option.c */
 void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
 
 /* kafka_expr.c */
+KafkaPartitionList *getPartitionList(KafkaOptions *kafka_options,
+                                     rd_kafka_t *kafka_handle,
+                                     rd_kafka_topic_t *kafka_topic_handle);
 void  KafkaFlattenScanlist(List *              scan_list,
-                           KafKaPartitionList *partition_list,
+                           KafkaPartitionList *partition_list,
                            int64               batch_size,
                            KafkaParamValue *   param_values,
                            int                 num_params,

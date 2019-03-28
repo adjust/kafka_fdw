@@ -561,8 +561,13 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
      */
 
     /* Open connection if possible */
-    KafkaFdwGetConnection(festate);
+    KafkaFdwGetConnection(&kafka_options,
+                          &festate->kafka_handle,
+                          &festate->kafka_topic_handle);
 
+    festate->partition_list = getPartitionList(&kafka_options,
+                                               festate->kafka_handle,
+                                               festate->kafka_topic_handle);
     festate->scanop_list = scan_list;
     festate->buffer      = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
@@ -1539,8 +1544,13 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
 
     PG_TRY();
     {
-        /* Establish connection */
-        KafkaFdwGetConnection(festate);
+        KafkaFdwGetConnection(&kafka_options,
+                              &festate->kafka_handle,
+                              &festate->kafka_topic_handle);
+
+        festate->partition_list = getPartitionList(&kafka_options,
+                                           festate->kafka_handle,
+                                           festate->kafka_topic_handle);
         partnum = festate->partition_list->partition_cnt;
 
         /* Allocate memory for partition bounds */

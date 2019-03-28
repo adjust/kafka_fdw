@@ -173,8 +173,56 @@ cmpfunc(const void *a, const void *b)
     return (*(int32 *) a - *(int32 *) b);
 }
 
+KafkaPartitionList *
+getPartitionList(KafkaOptions *kafka_options,
+                 rd_kafka_t *kafka_handle,
+                 rd_kafka_topic_t *kafka_topic_handle)
+{
+    KafkaPartitionList     *partition_list = NULL;
+    rd_kafka_resp_err_t     err;
+    const struct rd_kafka_metadata       *metadata;
+    const struct rd_kafka_metadata_topic *topic;
+    int     i;
+
+    /* Fetch metadata */
+    err = rd_kafka_metadata(kafka_handle, 0, kafka_topic_handle, &metadata, 5000);
+
+    if (err != RD_KAFKA_RESP_ERR_NO_ERROR)
+        elog(ERROR, "%% Failed to acquire metadata: %s\n", rd_kafka_err2str(err));
+
+    if (metadata->topic_cnt != 1)
+    {
+        rd_kafka_metadata_destroy(metadata);
+        elog(ERROR, "%% Surprisingly got %d topics while 1 was expected", metadata->topic_cnt);
+    }
+
+    topic = &metadata->topics[0];
+    if (topic->partition_cnt == 0)
+    {
+        rd_kafka_metadata_destroy(metadata);
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_ERROR),
+                 errmsg_internal("Topic %s has zero partitions",
+                                 kafka_options->topic)));
+    }
+
+    /* Get partitions list for topic */
+    partition_list                = palloc(sizeof(KafkaPartitionList));
+    partition_list->partition_cnt = topic->partition_cnt;
+    partition_list->partitions    = palloc0(partition_list->partition_cnt * sizeof(int32));
+
+    for (i = 0; i < partition_list->partition_cnt; i++)
+    {
+        partition_list->partitions[i] = topic->partitions[i].id;
+    }
+
+    rd_kafka_metadata_destroy(metadata);
+
+    return partition_list;
+}
+
 static bool
-partion_member(KafKaPartitionList *partition_list, int32 search_partition)
+partion_member(KafkaPartitionList *partition_list, int32 search_partition)
 {
     int32 first, last, middle;
     first  = 0;
@@ -345,7 +393,7 @@ get_partition(List *           param_id_list,
 */
 void
 KafkaFlattenScanlist(List *              scan_list,
-                     KafKaPartitionList *partition_list,
+                     KafkaPartitionList *partition_list,
                      int64               batch_size,
                      KafkaParamValue *   param_values,
                      int                 num_params,

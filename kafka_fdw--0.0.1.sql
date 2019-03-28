@@ -20,3 +20,4 @@ LANGUAGE C STRICT;
 CREATE FOREIGN DATA WRAPPER kafka_fdw
   HANDLER kafka_fdw_handler
   VALIDATOR kafka_fdw_validator;
+
