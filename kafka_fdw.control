@@ -1,5 +1,5 @@
 # kafka FDW
 comment = 'kafka Foreign Data Wrapper for CSV formated messages'
-default_version = '0.0.1'
+default_version = '0.0.2'
 module_pathname = '$libdir/kafka_fdw'
 relocatable = true

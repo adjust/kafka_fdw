@@ -126,3 +126,5 @@ PREPARE kafka_test(int,bigint,bigint, int,bigint,bigint) AS SELECT COUNT(*) FROM
 EXPLAIN (COSTS OFF) EXECUTE kafka_test(1,100,200,1,500,600);
 EXPLAIN (COSTS OFF) EXECUTE kafka_test(1,1,2,1,5,6);
 
+-- test utils
+SELECT * FROM kafka_get_watermarks('kafka_test_part') ORDER BY partition;
