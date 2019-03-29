@@ -174,8 +174,7 @@ cmpfunc(const void *a, const void *b)
 }
 
 KafkaPartitionList *
-getPartitionList(KafkaOptions *kafka_options,
-                 rd_kafka_t *kafka_handle,
+getPartitionList(rd_kafka_t *kafka_handle,
                  rd_kafka_topic_t *kafka_topic_handle)
 {
     KafkaPartitionList     *partition_list = NULL;
@@ -197,24 +196,14 @@ getPartitionList(KafkaOptions *kafka_options,
     }
 
     topic = &metadata->topics[0];
-    if (topic->partition_cnt == 0)
-    {
-        rd_kafka_metadata_destroy(metadata);
-        ereport(ERROR,
-                (errcode(ERRCODE_FDW_ERROR),
-                 errmsg_internal("Topic %s has zero partitions",
-                                 kafka_options->topic)));
-    }
 
     /* Get partitions list for topic */
-    partition_list                = palloc(sizeof(KafkaPartitionList));
+    partition_list = palloc0(offsetof(KafkaPartitionList, partitions) +
+                             topic->partition_cnt * sizeof(int32));
     partition_list->partition_cnt = topic->partition_cnt;
-    partition_list->partitions    = palloc0(partition_list->partition_cnt * sizeof(int32));
 
     for (i = 0; i < partition_list->partition_cnt; i++)
-    {
         partition_list->partitions[i] = topic->partitions[i].id;
-    }
 
     rd_kafka_metadata_destroy(metadata);
 

@@ -565,9 +565,16 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
                           &festate->kafka_handle,
                           &festate->kafka_topic_handle);
 
-    festate->partition_list = getPartitionList(&kafka_options,
-                                               festate->kafka_handle,
+    festate->partition_list = getPartitionList(festate->kafka_handle,
                                                festate->kafka_topic_handle);
+    if (festate->partition_list->partition_cnt == 0)
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_FDW_ERROR),
+                 errmsg_internal("Topic %s has zero partitions",
+                                 kafka_options.topic)));
+    }
+
     festate->scanop_list = scan_list;
     festate->buffer      = palloc0(sizeof(rd_kafka_message_t *) * (kafka_options.batch_size));
 
@@ -1544,13 +1551,13 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
 
     PG_TRY();
     {
+        /* Establish connection */
         KafkaFdwGetConnection(&kafka_options,
                               &festate->kafka_handle,
                               &festate->kafka_topic_handle);
 
-        festate->partition_list = getPartitionList(&kafka_options,
-                                           festate->kafka_handle,
-                                           festate->kafka_topic_handle);
+        festate->partition_list = getPartitionList(festate->kafka_handle,
+                                                   festate->kafka_topic_handle);
         partnum = festate->partition_list->partition_cnt;
 
         /* Allocate memory for partition bounds */

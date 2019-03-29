@@ -11,19 +11,22 @@ kafka_get_watermarks(PG_FUNCTION_ARGS)
     Relation            rel;
     KafkaOptions        kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ParseOptions        parse_options = { .format = -1 };
-    rd_kafka_t         *kafka_handle;
-    rd_kafka_topic_t   *kafka_topic_handle;
+    rd_kafka_t         *kafka_handle = NULL;
+    rd_kafka_topic_t   *kafka_topic_handle = NULL;
 
     /* Lock relation */
     rel = relation_open(relid, AccessShareLock);
 
-    kafkaGetOptions(relid, &kafka_options, &parse_options);
+    if (RelationGetForm(rel)->relkind != RELKIND_FOREIGN_TABLE)
+    {
+        relation_close(rel, AccessShareLock);
+        elog(ERROR,
+             "relation '%s' is not a foreign table",
+             RelationGetRelationName(rel));
+    }
 
-    /* Establish connection */
-    KafkaFdwGetConnection(&kafka_options,
-                          &kafka_handle,
-                          &kafka_topic_handle);
-    
+    kafkaGetOptions(relid, &kafka_options, &parse_options);
+ 
     PG_TRY();
     {
         KafkaPartitionList *partition_list;
@@ -34,13 +37,16 @@ kafka_get_watermarks(PG_FUNCTION_ARGS)
         bool        nulls[3] = {0};
         int         i;
 
+        /* Establish connection */
+        KafkaFdwGetConnection(&kafka_options,
+                              &kafka_handle,
+                              &kafka_topic_handle);
+
         /* Build a tuple descriptor for our result type */
         if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
             elog(ERROR, "return type must be a row type");
 
-        partition_list = getPartitionList(&kafka_options,
-                                          kafka_handle,
-                                          kafka_topic_handle);
+        partition_list = getPartitionList(kafka_handle, kafka_topic_handle);
 
         /* Build tuplestore to hold the result rows */
         oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
@@ -84,8 +90,10 @@ kafka_get_watermarks(PG_FUNCTION_ARGS)
     PG_CATCH();
     {
         /* Close the connection and rethrow an error */
-        rd_kafka_topic_destroy(kafka_topic_handle);
-        rd_kafka_destroy(kafka_handle);
+        if (kafka_topic_handle)
+            rd_kafka_topic_destroy(kafka_topic_handle);
+        if (kafka_handle)
+            rd_kafka_destroy(kafka_handle);
         PG_RE_THROW();
     }
     PG_END_TRY();
