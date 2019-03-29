@@ -1,12 +1,4 @@
 #include "kafka_fdw.h"
-/*
-set a connection to festate
-basically
-    festate->kafka_handle
-    festate->kafka_topic_handle
-    festate->partition_list
- is set here
-*/
 
 void
 KafkaFdwGetConnection(KafkaOptions *k_options,

@@ -128,7 +128,7 @@ typedef struct KafkaScanP
 typedef struct KafkaPartitionList
 {
     int32  partition_cnt;
-    int32 *partitions;
+    int32  partitions[FLEXIBLE_ARRAY_MEMBER];
 } KafkaPartitionList;
 
 typedef struct KafkaOptions
@@ -254,8 +254,7 @@ void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 void kafkaGetOptions(Oid foreigntableid, KafkaOptions *kafka_options, ParseOptions *parse_options);
 
 /* kafka_expr.c */
-KafkaPartitionList *getPartitionList(KafkaOptions *kafka_options,
-                                     rd_kafka_t *kafka_handle,
+KafkaPartitionList *getPartitionList(rd_kafka_t *kafka_handle,
                                      rd_kafka_topic_t *kafka_topic_handle);
 void  KafkaFlattenScanlist(List *              scan_list,
                            KafkaPartitionList *partition_list,
