@@ -106,8 +106,10 @@ KafkaFdwGetConnection(KafkaFdwExecutionState *festate)
 void
 kafkaCloseConnection(KafkaFdwExecutionState *festate)
 {
-    rd_kafka_topic_destroy(festate->kafka_topic_handle);
-    rd_kafka_destroy(festate->kafka_handle);
+    if (festate->kafka_topic_handle)
+        rd_kafka_topic_destroy(festate->kafka_topic_handle);
+    if (festate->kafka_handle)
+        rd_kafka_destroy(festate->kafka_handle);
     festate->kafka_topic_handle = NULL;
     festate->kafka_handle       = NULL;
 }
