@@ -11,6 +11,16 @@ SELECT * FROM kafka_test_part where (part between 3 and 2 and offs > 100) ;
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
+#if PG_VERSION_NUM >= 120000
+#include "nodes/nodeFuncs.h"
+#else
+#define is_orclause(expr) \
+    or_clause((Node *) (expr))
+
+#define is_andclause(expr) \
+    and_clause((Node *) (expr))
+#endif
+
 #define canHandleType(x) ((x) == INT8OID || (x) == INT4OID || (x) == INT2OID)
 
 #ifndef PG_INT64_MAX
@@ -569,7 +579,7 @@ dnfNorm(Expr *expr, int partition_attnum, int offset_attnum)
     if (expr == NULL)
         return NIL;
 
-    if (or_clause((Node *) expr))
+    if (is_orclause(expr))
     {
         List *    orlist = NIL;
         ListCell *temp;
@@ -582,7 +592,7 @@ dnfNorm(Expr *expr, int partition_attnum, int offset_attnum)
         }
         return orlist;
     }
-    else if (and_clause((Node *) expr))
+    else if (is_andclause(expr))
     {
         List *    andlist = NIL;
         ListCell *temp;

@@ -1,6 +1,11 @@
 #include "kafka_fdw.h"
 #include "funcapi.h"
 
+#if PG_VERSION_NUM >= 120000
+#include "access/relation.h"
+#endif
+
+
 PG_FUNCTION_INFO_V1(kafka_get_watermarks);
 
 Datum

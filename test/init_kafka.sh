@@ -53,7 +53,7 @@ $kafka_cmd contrib_regress_junk <<-EOF
 421,"correct line",01-01-2015,Thu Jan 01 07:01:00 2015
 999999999999999,"invalid number",01-01-2015,Thu Jan 01 07:11:00 2015
 521,"correct line",01-01-2015,Thu Jan 01 08:41:00 2015
-foo,"invalid number, invalid date and extra data",20-20-2015,Thu Jan 01 09:31:00 2015,extra data
+999999999999999,"invalid number, invalid date and extra data",20-20-2015,Thu Jan 01 09:31:00 2015,extra data
 "401,unterminated string,01-01-2015,Thu Jan 01 06:41:00 2015
 EOF
 

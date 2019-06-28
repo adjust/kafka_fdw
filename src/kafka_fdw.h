@@ -25,10 +25,15 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
-#include "optimizer/var.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+
+#if PG_VERSION_NUM >= 120000
+#include "access/table.h"
+#else
+#include "optimizer/var.h"
+#endif
 
 #define WARTERMARK_TIMEOUT 1000     /* timeout to query watermark */
 #define ESTIMATE_TUPLES 10000000000 /* current hard coded tuple estimate */
