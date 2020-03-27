@@ -336,11 +336,14 @@ static void
 KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
 {
 
-    ListCell *option;
+    ListCell       *option;
+    KafkaOptions    default_kafka_options = { .offset_attnum = -1,
+                                              .partition_attnum = -1,
+                                              .junk_attnum = -1 };
 
     /* Support external use for option sanity checking */
     if (kafka_options == NULL)
-        kafka_options = &(KafkaOptions){ .offset_attnum = -1, .partition_attnum = -1, .junk_attnum = -1 };
+        kafka_options = &default_kafka_options;
 
     foreach (option, options)
     {
