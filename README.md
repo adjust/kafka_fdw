@@ -44,7 +44,7 @@ CREATE USER MAPPING FOR PUBLIC SERVER kafka_server;
 
 CREATE FOREIGN TABLE
 must specify the two meta columns for partition and offset.
-These can be named abritrary just must be specified wich is what using options.
+These can be named arbitrary just must be specified wich is what using options.
 Note offset is a sql reserved keyword so naming a column `offset` needs quotation
 when used.
 The remaining columns must match the expected csv message format.
