@@ -39,15 +39,40 @@ matrix:
           - export PGPORT=5433
           - sudo make install
       - env: postgres=11
+        addons:
+            postgresql: 11
+            apt:
+                packages:
+                  - postgresql-11
+                  - postgresql-client-11
+                  - postgresql-server-dev-11
+        install:
+          - export PGPORT=5433
+          - sudo make install
+      - env: postgres=12
+        addons:
+            postgresql: 12
+            apt:
+                packages:
+                  - postgresql-12
+                  - postgresql-client-12
+                  - postgresql-server-dev-12
+        install:
+          - export PGPORT=5433
+          - sudo make install
+      - env: postgres=13
         install:
           - sudo apt-get remove -y postgresql-9.2
-          - sudo apt-get install postgresql-11 postgresql-client-11 postgresql-server-dev-11
+          - sudo apt-get install postgresql-13 postgresql-client-13 postgresql-server-dev-13
           - export PGPORT=5433
           - sudo -u postgres psql  -c "create user travis with superuser";
           - sudo make install
 
     allow_failures:
       - env: postgres=9.4
+      - env: postgres=9.5
+      - env: postgres=9.6
+      - env: postgres=13
 
     fast_finish: true
 
