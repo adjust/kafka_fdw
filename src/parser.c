@@ -3,7 +3,12 @@
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/json.h"
+#if PG_VERSION_NUM >= 130000
+#include "common/jsonapi.h"
+#include "mb/pg_wchar.h"
+#else
 #include "utils/jsonapi.h"
+#endif
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
@@ -363,7 +368,11 @@ get_json_as_hash(char *json, int len, const char *funcname)
     HASHCTL         ctl;
     HTAB *          tab;
     JHashState *    state;
+#if PG_VERSION_NUM >= 130000
+    JsonLexContext *lex = makeJsonLexContextCstringLen(json, len, PG_UTF8, true);
+#else
     JsonLexContext *lex = makeJsonLexContextCstringLen(json, len, true);
+#endif
     JsonSemAction * sem;
 
     memset(&ctl, 0, sizeof(ctl));

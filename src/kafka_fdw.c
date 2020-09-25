@@ -1290,15 +1290,24 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 
     initStringInfo(&festate->attribute_buf);
 
+#if PG_VERSION_NUM < 130000
     prev = NULL;
+#endif
     for (lc = list_head(festate->attnumlist); lc; lc = next)
     {
         int attnum = lfirst_int(lc);
+#if PG_VERSION_NUM >= 130000
+        next       = lnext(festate->attnumlist, lc);
+#else
         next       = lnext(lc);
-
+#endif
         if (!parsable_attnum(attnum, kafka_options))
         {
+#if PG_VERSION_NUM >= 130000
+            festate->attnumlist = list_delete_cell(festate->attnumlist, lc);
+#else
             festate->attnumlist = list_delete_cell(festate->attnumlist, lc, prev);
+#endif
         }
         else
         {
@@ -1317,7 +1326,9 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
             }
 
             num++;
+#if PG_VERSION_NUM < 130000
             prev = lc;
+#endif
         }
     }
 
