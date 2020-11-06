@@ -6,6 +6,10 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
+#if PG_VERSION_NUM >= 130000
+#include "access/relation.h"
+#endif
+
 PG_MODULE_MAGIC;
 
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
@@ -1184,7 +1188,11 @@ kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelatio
     List *         returningList = NIL;
     RangeTblEntry *rte           = planner_rt_fetch(resultRelation, root);
 
+#if PG_VERSION_NUM < 130000
     rel     = heap_open(rte->relid, NoLock);
+#else
+    rel     = relation_open(rte->relid, NoLock);
+#endif
     tupdesc = RelationGetDescr(rel);
 
     for (attnum = 1; attnum <= tupdesc->natts; attnum++)
@@ -1204,7 +1212,11 @@ kafkaPlanForeignModify(PlannerInfo *root, ModifyTable *plan, Index resultRelatio
     if (plan->onConflictAction)
         elog(ERROR, "unexpected ON CONFLICT specification: %d", (int) plan->onConflictAction);
 
+#if PG_VERSION_NUM < 130000
     heap_close(rel, NoLock);
+#else
+    relation_close(rel, NoLock);
+#endif
 
     /*
      * Build the fdw_private list that will be available to the executor.
@@ -1253,11 +1265,12 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     Oid                  typefnoid;
     bool                 isvarlena;
     int                  n_params, num = 0;
-    ListCell *           lc, *prev, *next;
+    ListCell            *lc;
     KafkaOptions         kafka_options = { DEFAULT_KAFKA_OPTIONS };
     ParseOptions         parse_options = { .format = -1 };
     Relation             rel           = rinfo->ri_RelationDesc;
     char                 errstr[512]; /* librdkafka API error reporting buffer */
+    List                *attnumlist;
 
     DEBUGLOG("%s", __func__);
 
@@ -1275,9 +1288,10 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     festate                = (KafkaFdwModifyState *) palloc0(sizeof(KafkaFdwModifyState));
     festate->kafka_options = kafka_options;
     festate->parse_options = parse_options;
+    festate->attnumlist    = NIL;
 
-    festate->attnumlist    = (List *) list_nth(fdw_private, 0);
-    n_params               = list_length(festate->attnumlist);
+    attnumlist  = (List *) list_nth(fdw_private, 0);
+    n_params    = list_length(attnumlist);
     festate->out_functions = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * n_params);
 
     /* if we use json we need attnames and oids */
@@ -1290,35 +1304,30 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 
     initStringInfo(&festate->attribute_buf);
 
-    prev = NULL;
-    for (lc = list_head(festate->attnumlist); lc; lc = next)
+    foreach (lc, attnumlist)
     {
         int attnum = lfirst_int(lc);
-        next       = lnext(lc);
+        Form_pg_attribute attr;
 
         if (!parsable_attnum(attnum, kafka_options))
+            continue;
+
+        festate->attnumlist = lappend_int(festate->attnumlist, attnum);
+
+        attr = TupleDescAttr(RelationGetDescr(rel), attnum - 1);
+        Assert(!attr->attisdropped);
+
+        getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
+        fmgr_info(typefnoid, &festate->out_functions[num]);
+
+        if (parse_options.format == JSON)
         {
-            festate->attnumlist = list_delete_cell(festate->attnumlist, lc, prev);
+            festate->attnames[num]    = getJsonAttname(attr, &festate->attname_buf);
+            festate->typioparams[num] = attr->atttypid;
+            DEBUGLOG("type oid %u", attr->atttypid);
         }
-        else
-        {
 
-            Form_pg_attribute attr = TupleDescAttr(RelationGetDescr(rel), attnum - 1);
-            Assert(!attr->attisdropped);
-
-            getTypeOutputInfo(attr->atttypid, &typefnoid, &isvarlena);
-            fmgr_info(typefnoid, &festate->out_functions[num]);
-
-            if (parse_options.format == JSON)
-            {
-                festate->attnames[num]    = getJsonAttname(attr, &festate->attname_buf);
-                festate->typioparams[num] = attr->atttypid;
-                DEBUGLOG("type oid %u", attr->atttypid);
-            }
-
-            num++;
-            prev = lc;
-        }
+        num++;
     }
 
     conf = rd_kafka_conf_new();

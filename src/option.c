@@ -1,6 +1,10 @@
 #include "kafka_fdw.h"
 #include "mb/pg_wchar.h"
 
+#if PG_VERSION_NUM >= 130000
+#include "access/relation.h"
+#endif
+
 /*
  * Describes the valid options for objects that use this wrapper.
  */
@@ -423,7 +427,11 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
     AttrNumber natts;
     AttrNumber attnum;
 
+#if PG_VERSION_NUM < 130000
     rel                          = heap_open(relid, AccessShareLock);
+#else
+    rel                          = relation_open(relid, AccessShareLock);
+#endif
     tupleDesc                    = RelationGetDescr(rel);
     natts                        = tupleDesc->natts;
     kafka_options->num_parse_col = 0;
@@ -490,5 +498,9 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
     if (kafka_options->junk_error_attnum != -1)
         kafka_options->num_parse_col--;
 
+#if PG_VERSION_NUM < 130000
     heap_close(rel, AccessShareLock);
+#else
+    relation_close(rel, AccessShareLock);
+#endif
 }
