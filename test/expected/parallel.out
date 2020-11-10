@@ -13,13 +13,15 @@ SERVER kafka_server OPTIONS
     (format 'csv', topic 'contrib_regress4', batch_size '30', buffer_delay '100');
 NOTICE:  relation "kafka_test_part" already exists, skipping
 ALTER FOREIGN TABLE kafka_test_part OPTIONS(ADD num_partitions '4');
-set max_parallel_workers_per_gather=4;
+set max_parallel_workers_per_gather=2;
 set max_parallel_workers=8;
+set parallel_setup_cost=0;
+ANALYZE kafka_test_part;
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part ;
                     QUERY PLAN                    
 --------------------------------------------------
  Gather
-   Workers Planned: 3
+   Workers Planned: 2
    ->  Parallel Foreign Scan on kafka_test_part
          Kafka topic: contrib_regress4
          scanning: PARTITION >= 0 AND OFFSET >= 0
@@ -51,7 +53,7 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) 
                                                                   QUERY PLAN                                                                   
 -----------------------------------------------------------------------------------------------------------------------------------------------
  Gather
-   Workers Planned: 4
+   Workers Planned: 2
    ->  Parallel Foreign Scan on kafka_test_part
          Filter: ((((part = 1) OR (part = 2)) AND (offs = 3)) OR ((part = 4) AND (offs = 7)) OR ((part = 5) AND ((offs = 10) OR (offs = 12))))
          Kafka topic: contrib_regress4

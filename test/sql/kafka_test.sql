@@ -127,4 +127,4 @@ EXPLAIN (COSTS OFF) EXECUTE kafka_test(1,100,200,1,500,600);
 EXPLAIN (COSTS OFF) EXECUTE kafka_test(1,1,2,1,5,6);
 
 -- test utils
-SELECT * FROM kafka_get_watermarks('kafka_test_part') ORDER BY partition;
+SELECT SUM(offset_low), SUM(offset_high) FROM kafka_get_watermarks('kafka_test_part');
