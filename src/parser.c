@@ -5,6 +5,7 @@
 #include "utils/json.h"
 #if PG_VERSION_NUM >= 130000
 #include "common/jsonapi.h"
+#include "utils/jsonfuncs.h"
 #include "mb/pg_wchar.h"
 #else
 #include "utils/jsonapi.h"
@@ -369,7 +370,9 @@ get_json_as_hash(char *json, int len, const char *funcname)
     HTAB *          tab;
     JHashState *    state;
 #if PG_VERSION_NUM >= 130000
-    JsonLexContext *lex = makeJsonLexContextCstringLen(json, len, PG_UTF8, true);
+    JsonLexContext *lex = makeJsonLexContextCstringLen(json, len,
+                                                       GetDatabaseEncoding(),
+                                                       true);
 #else
     JsonLexContext *lex = makeJsonLexContextCstringLen(json, len, true);
 #endif
@@ -394,7 +397,13 @@ get_json_as_hash(char *json, int len, const char *funcname)
     sem->object_field_start = hash_object_field_start;
     sem->object_field_end   = hash_object_field_end;
 
+#if PG_VERSION_NUM < 130000
     pg_parse_json(lex, sem);
+#else
+    JsonParseErrorType error;
+    if ((error = pg_parse_json(lex, sem)) != JSON_SUCCESS)
+        json_ereport_error(error, lex);
+#endif
 
     return tab;
 }
