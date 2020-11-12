@@ -27,15 +27,6 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part ;
          scanning: PARTITION >= 0 AND OFFSET >= 0
 (5 rows)
 
-EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE offs = 1 AND part = 0;
-                QUERY PLAN                
-------------------------------------------
- Foreign Scan on kafka_test_part
-   Filter: ((offs = 1) AND (part = 0))
-   Kafka topic: contrib_regress4
-   scanning: PARTITION = 0 AND OFFSET = 1
-(4 rows)
-
 EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) and offs = 3) OR (part = 4 and offs=7);
                                           QUERY PLAN                                          
 ----------------------------------------------------------------------------------------------
