@@ -1476,13 +1476,17 @@ kafkaEndForeignModify(EState *estate, ResultRelInfo *rinfo)
 {
     KafkaFdwModifyState *festate = (KafkaFdwModifyState *) rinfo->ri_FdwState;
 
-    rd_kafka_flush(festate->kafka_handle, 10 * 1000 /* wait for max 10 seconds */);
+    /* In case of EXPLAIN query we don't have execution state */
+    if (festate)
+    {
+        rd_kafka_flush(festate->kafka_handle, 10 * 1000 /* wait for max 10 seconds */);
 
-    /* Destroy topic object */
-    rd_kafka_topic_destroy(festate->kafka_topic_handle);
+        /* Destroy topic object */
+        rd_kafka_topic_destroy(festate->kafka_topic_handle);
 
-    /* Destroy the producer instance */
-    rd_kafka_destroy(festate->kafka_handle);
+        /* Destroy the producer instance */
+        rd_kafka_destroy(festate->kafka_handle);
+    }
 }
 
 /*

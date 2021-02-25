@@ -46,6 +46,9 @@ SELECT i,
     ('2015-01-01'::date + (i || ' minutes')::interval)::timestamp
 FROM generate_series(1,1e4::int, 10) i ORDER BY i;
 
+EXPLAIN (COSTS OFF) INSERT INTO kafka_test_prod(some_int, some_text, some_date, some_time)
+VALUES (1, 'test', NULL, NULL);
+
 
 --- check total was inserted
 SELECT SUM(count) FROM(
