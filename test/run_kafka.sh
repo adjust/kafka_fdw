@@ -5,7 +5,7 @@
 #
 set -ex
 
-KAFKA_ARCHIVE=kafka_2.13-2.6.0.tgz
+KAFKA_ARCHIVE=kafka_2.13-2.7.0.tgz
 
 # Install JRE
 mkdir -p /usr/share/man/man1
@@ -15,7 +15,7 @@ apt-get install -yq default-jre-headless
 
 # Download Apache Kafka
 apt-get install -yq wget
-wget https://downloads.apache.org/kafka/2.6.0/${KAFKA_ARCHIVE}
+wget https://downloads.apache.org/kafka/2.7.0/${KAFKA_ARCHIVE}
 mkdir /kafka
 tar -xzf ${KAFKA_ARCHIVE} -C /kafka --strip-components=1
 export PATH="/kafka/bin/:$PATH"
