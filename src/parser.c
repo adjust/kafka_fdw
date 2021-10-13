@@ -368,6 +368,7 @@ get_json_as_hash(char *json, int len, const char *funcname)
 {
     HASHCTL         ctl;
     HTAB *          tab;
+    int             flags = HASH_ELEM | HASH_CONTEXT;
     JHashState *    state;
 #if PG_VERSION_NUM >= 130000
     JsonLexContext *lex = makeJsonLexContextCstringLen(json, len,
@@ -378,11 +379,15 @@ get_json_as_hash(char *json, int len, const char *funcname)
 #endif
     JsonSemAction * sem;
 
+#if PG_VERSION_NUM >= 140000
+    flags |= HASH_STRINGS;
+#endif
+
     memset(&ctl, 0, sizeof(ctl));
     ctl.keysize   = NAMEDATALEN;
     ctl.entrysize = sizeof(JsonHashEntry);
     ctl.hcxt      = CurrentMemoryContext;
-    tab           = hash_create("json object hashtable", 100, &ctl, HASH_ELEM | HASH_CONTEXT);
+    tab           = hash_create("json object hashtable", 100, &ctl, flags);
 
     state = palloc0(sizeof(JHashState));
     sem   = palloc0(sizeof(JsonSemAction));

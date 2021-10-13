@@ -43,7 +43,7 @@ KafkaEstimateSize(PlannerInfo *root, RelOptInfo *baserel, KafkaFdwPlanState *fdw
     }
 
     /* Use statistics if we have it */
-    if (baserel->tuples)
+    if (baserel->tuples > 0)
     {
         /*
          * Now estimate the number of rows returned by the scan after applying the
