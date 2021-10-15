@@ -12,7 +12,7 @@ RUN apk --no-cache add make musl-dev gcc clang llvm util-linux-dev wget librdkaf
 
 # Make postgres directories writable
 RUN chmod a+rwx /usr/local/lib/postgresql && \
-    chmod a+rwx /usr/local/lib/postgresql/bitcode && \
+    chmod a+rwx /usr/local/lib/postgresql/bitcode || true && \
     chmod a+rwx /usr/local/share/postgresql/extension
 
 # Make directories

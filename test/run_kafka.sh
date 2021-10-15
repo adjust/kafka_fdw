@@ -12,14 +12,6 @@ DIST=$(cat /etc/os-release | grep ^ID= | sed s/ID=//)
 
 echo
 
-if [ $DIST != 'alpine' ]; then
-    # Install JRE
-    mkdir -p /usr/share/man/man1
-    apt-get update
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get install -yq default-jre-headless wget
-fi
-
 # Download Apache Kafka
 wget https://downloads.apache.org/kafka/${KAFKA_VERSION}/${KAFKA_ARCHIVE}
 tar -xzf ${KAFKA_ARCHIVE} -C /kafka --strip-components=1

@@ -16,11 +16,22 @@ jobs:
     runs-on: ubuntu-latest
     container: zilder/pg-ext-check
     steps:
+      # Install and run postgres
       - run: pg-setup ${{ matrix.pg }}
-      - run: apt-get install -yq librdkafka-dev libz-dev
+
+      # Install packages
+      - run: mkdir -p /usr/share/man/man1
+      - run: apt-get install -yq librdkafka-dev libz-dev default-jre-headless wget
+
+      # Clone repo
       - uses: actions/checkout@v2
+
+      # Install and run zookeeper/kafka
+      - run: mkdir /kafka
       - run: ./run_kafka.sh
         working-directory: ./test
+
+      # Build kafka_fdw and run tests
       - run: build-check
         env:
           KAFKA_PRODUCER: "/kafka/bin/kafka-console-producer.sh"
