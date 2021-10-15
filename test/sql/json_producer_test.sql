@@ -63,13 +63,6 @@ UNION ALL
 SELECT COUNT(*) FROM kafka_test_prod_json WHERE offs >= 0 and part=3
 )t;
 
---- check auto distribution makes sense
-SELECT COUNT(*) BETWEEN 100 AND 400 FROM kafka_test_prod_json WHERE offs >= 0 and part=0;
-SELECT COUNT(*) BETWEEN 100 AND 400 FROM kafka_test_prod_json WHERE offs >= 0 and part=1;
-SELECT COUNT(*) BETWEEN 100 AND 400 FROM kafka_test_prod_json WHERE offs >= 0 and part=2;
-SELECT COUNT(*) BETWEEN 100 AND 400 FROM kafka_test_prod_json WHERE offs >= 0 and part=3;
-
-
 --- check data is readable
 SELECT some_int, some_text, some_date FROM(
 (SELECT some_int, some_text, some_date FROM kafka_test_prod_json WHERE offs >= 0 and part=0 AND some_int = 231 LIMIT 1)

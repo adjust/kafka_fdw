@@ -16,12 +16,8 @@ SET seq_page_cost     = 1.0;
 SET cpu_tuple_cost    = 0.01;
 SET cpu_operator_cost = 0.0025;
 SET max_parallel_workers_per_gather = 0;
--- without statistics
-EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 50;
-EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 500;
-EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int > 50000;
+-- without statistics (in pg14 reltuples=-1 when uninitialized, and =0 in earlier versions)
+SELECT reltuples > 0 FROM pg_class WHERE oid = 'kafka_analyze_json'::regclass;
 -- with statistics
 ANALYZE kafka_analyze_json;
-EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 50;
-EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int < 500;
-EXPLAIN SELECT FROM kafka_analyze_json WHERE some_int > 50000;
+SELECT reltuples FROM pg_class WHERE oid = 'kafka_analyze_json'::regclass;

@@ -2,7 +2,10 @@ ARG PG_VERSION
 FROM postgres:${PG_VERSION}-alpine
 
 # Environment
-ENV LANG=C.UTF-8 REPO=/repo
+ENV LANG=C.UTF-8
+ENV REPO=/repo
+ENV KAFKA_PRODUCER="/kafka/bin/kafka-console-producer.sh"
+ENV KAFKA_TOPICS="/kafka/bin/kafka-topics.sh"
 
 # Install dependencies
 RUN apk --no-cache add make musl-dev gcc clang llvm util-linux-dev wget librdkafka-dev openjdk8-jre;

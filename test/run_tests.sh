@@ -5,9 +5,6 @@ set -e
 test/run_kafka.sh
 test/run_postgres.sh
 
-export KAFKA_PRODUCER="/kafka/bin/kafka-console-producer.sh"
-export KAFKA_TOPICS="/kafka/bin/kafka-topics.sh"
-
 set -x
 
 # build extension
