@@ -16,19 +16,14 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
 
     conf = rd_kafka_conf_new();
 
+    if (rd_kafka_conf_set(conf, "bootstrap.servers", k_options->brokers,
+                          errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+        elog(ERROR, "%s\n", errstr);
+
     *kafka_handle = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
 
     if (*kafka_handle != NULL)
     {
-        /* Add brokers */
-        /* Check if exactly 1 broker was added */
-        if (rd_kafka_brokers_add(*kafka_handle, k_options->brokers) < 1)
-        {
-            rd_kafka_destroy(*kafka_handle);
-            elog(ERROR, "No valid brokers specified");
-            *kafka_handle = NULL;
-        }
-
         /* Create topic handle */
         topic_conf = rd_kafka_topic_conf_new();
 
