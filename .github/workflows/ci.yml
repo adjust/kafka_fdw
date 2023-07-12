@@ -15,10 +15,10 @@ jobs:
         pg: [15, 14, 13, 12, 11, 10]
     name: PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
-    container: zilder/pg-ext-check
+    container: pgxn/pgxn-tools
     steps:
       # Install and run postgres
-      - run: pg-setup ${{ matrix.pg }}
+      - run: pg-start ${{ matrix.pg }}
 
       # Install packages
       - run: mkdir -p /usr/share/man/man1
@@ -33,7 +33,7 @@ jobs:
         working-directory: ./test
 
       # Build kafka_fdw and run tests
-      - run: build-check
+      - run: pg-build-test
         env:
           KAFKA_PRODUCER: "/kafka/bin/kafka-console-producer.sh"
           KAFKA_TOPICS: "/kafka/bin/kafka-topics.sh"
