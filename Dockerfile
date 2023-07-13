@@ -8,7 +8,7 @@ ENV KAFKA_PRODUCER="/kafka/bin/kafka-console-producer.sh"
 ENV KAFKA_TOPICS="/kafka/bin/kafka-topics.sh"
 
 # Install dependencies
-RUN apk --no-cache add make musl-dev gcc clang llvm util-linux-dev wget librdkafka-dev openjdk8-jre;
+RUN apk --no-cache add make musl-dev gcc clang clang15 llvm util-linux-dev wget librdkafka-dev openjdk8-jre;
 
 # Make postgres directories writable
 RUN chmod a+rwx /usr/local/lib/postgresql && \
