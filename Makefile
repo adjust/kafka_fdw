@@ -11,7 +11,7 @@ EXTRA_CLEAN  = $(EXTENSION)--$(EXTVERSION).sql
 MODULE_big   = $(EXTENSION)
 OBJS         =  $(patsubst %.c,%.o,$(wildcard src/*.c))
 PG_CONFIG   ?= pg_config
-PG_CPPFLAGS  = -std=c++17 -Wall -Wextra -Wno-unused-parameter
+PG_CPPFLAGS  = -std=c99 -Wall -Wextra -Wno-unused-parameter
 
 ifndef NOINIT
 REGRESS_PREP = prep_kafka
