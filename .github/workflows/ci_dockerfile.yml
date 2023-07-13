@@ -12,11 +12,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [15, 14, 13, 12, 11, 10]
+        include:
+          - clang: 15
+            pg: 15
+          - clang: 15
+            pg: 14
+          - clang: 15
+            pg: 13
+          - clang: 15
+            pg: 12
+          - clang: 15
+            pg: 11
+          - clang: none
+            pg: 10
     name: PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: docker build --tag tests --build-arg="PG_VERSION=${{ matrix.pg }}" .
+      - run: docker build --tag tests --build-arg="PG_VERSION=${{ matrix.pg }}" --target="clang-${{ matrix.clang }}" .
       - run: docker run --rm tests
 
