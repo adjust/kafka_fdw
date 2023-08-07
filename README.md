@@ -30,7 +30,7 @@ see `test/init_kafka.sh`
 
 ## Usage
 
-CREATE SERVER must specifie a brokerlist using option `brokers`
+CREATE SERVER must specify a brokerlist using option `brokers`
 ```SQL
 CREATE SERVER kafka_server
 FOREIGN DATA WRAPPER kafka_fdw

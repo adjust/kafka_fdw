@@ -5,7 +5,7 @@
 #
 set -ex
 
-KAFKA_VERSION=2.8.1
+KAFKA_VERSION=2.8.2
 KAFKA_ARCHIVE=kafka_2.13-${KAFKA_VERSION}.tgz
 
 DIST=$(cat /etc/os-release | grep ^ID= | sed s/ID=//)
@@ -13,7 +13,7 @@ DIST=$(cat /etc/os-release | grep ^ID= | sed s/ID=//)
 echo
 
 # Download Apache Kafka
-wget https://downloads.apache.org/kafka/${KAFKA_VERSION}/${KAFKA_ARCHIVE}
+wget https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/${KAFKA_ARCHIVE}
 tar -xzf ${KAFKA_ARCHIVE} -C /kafka --strip-components=1
 export PATH="/kafka/bin/:$PATH"
 

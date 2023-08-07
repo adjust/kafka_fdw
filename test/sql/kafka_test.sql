@@ -1,5 +1,7 @@
 \i test/sql/setup.inc
 
+SET max_parallel_workers_per_gather = 0;
+
 /*
  * Returns EXPLAIN ANALYZE result without any arbitrary numbers like costs
  * or execution time.
