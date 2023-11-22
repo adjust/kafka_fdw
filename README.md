@@ -24,7 +24,7 @@ to run test
 `make installcheck`
 
 not this runs an integration test against an asumed running
-kafaka on localhost:9092 with zookeeper on  localhost:2181
+kafka on localhost:9092 with zookeeper on  localhost:2181
 see `test/init_kafka.sh`
 
 
@@ -170,7 +170,7 @@ see test/sql/junk_test.sql for a usage example.
 
 ## Producing
 
-Inserting Data into kafak works with INSERT statements. If you provide the partition
+Inserting Data into kafka works with INSERT statements. If you provide the partition
 as a values that will be user otherwise kafkas builtin partitioner will select partition.
 
 
