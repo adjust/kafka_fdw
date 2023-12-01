@@ -150,6 +150,7 @@ typedef struct KafkaOptions
     bool  strict;            /* force strict parsing */
     bool  ignore_junk;       /* ignore junk data by setting it to null */
     int   num_parse_col;     /* number of parsable columns */
+    List *options;
 } KafkaOptions;
 
 typedef struct ParseOptions
