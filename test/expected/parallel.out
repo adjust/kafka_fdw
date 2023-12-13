@@ -57,3 +57,21 @@ EXPLAIN (COSTS OFF) SELECT * FROM kafka_test_part WHERE ((part = 1 or part = 2) 
          scanning: PARTITION = 5 AND OFFSET = 12
 (10 rows)
 
+SELECT COUNT(*) FROM kafka_test_part ;
+ count  
+--------
+ 100000
+(1 row)
+
+EXPLAIN (COSTS OFF) SELECT COUNT(*) FROM kafka_test_part ;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 3
+         ->  Partial Aggregate
+               ->  Parallel Foreign Scan on kafka_test_part
+                     Kafka topic: contrib_regress4
+                     scanning: PARTITION >= 0 AND OFFSET >= 0
+(7 rows)
+
