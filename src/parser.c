@@ -397,17 +397,23 @@ get_json_as_hash(char *json, int len, const char *funcname)
     state->lex           = lex;
 
     sem->semstate           = (void *) state;
-    sem->array_start        = hash_array_start;
-    sem->scalar             = hash_scalar;
-    sem->object_field_start = hash_object_field_start;
-    sem->object_field_end   = hash_object_field_end;
+    sem->array_start        = (void *) hash_array_start;
+    sem->scalar             = (void *) hash_scalar;
+    sem->object_field_start = (void *) hash_object_field_start;
+    sem->object_field_end   = (void *) hash_object_field_end;
 
 #if PG_VERSION_NUM < 130000
     pg_parse_json(lex, sem);
-#else
+#elif PG_VERSION_NUM < 160000
     JsonParseErrorType error;
     if ((error = pg_parse_json(lex, sem)) != JSON_SUCCESS)
         json_ereport_error(error, lex);
+#else
+    JsonParseErrorType error;
+    Node *minimalContext = (Node *)malloc(sizeof(Node));
+    if ((error = pg_parse_json(lex, sem)) != JSON_SUCCESS)
+        json_errsave_error(error, lex,minimalContext);
+    free(minimalContext);
 #endif
 
     return tab;
