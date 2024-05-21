@@ -15,10 +15,10 @@
 
 /* parse json */
 static HTAB *get_json_as_hash(char *json, int len, const char *funcname);
-static void  hash_object_field_start(void *state, char *fname, bool isnull);
-static void  hash_object_field_end(void *state, char *fname, bool isnull);
-static void  hash_array_start(void *state);
-static void  hash_scalar(void *state, char *token, JsonTokenType tokentype);
+static JsonParseErrorType  hash_object_field_start(void *state, char *fname, bool isnull);
+static JsonParseErrorType  hash_object_field_end(void *state, char *fname, bool isnull);
+static JsonParseErrorType  hash_array_start(void *state);
+static JsonParseErrorType  hash_scalar(void *state, char *token, JsonTokenType tokentype);
 
 /* encode json */
 
@@ -397,35 +397,27 @@ get_json_as_hash(char *json, int len, const char *funcname)
     state->lex           = lex;
 
     sem->semstate           = (void *) state;
-    sem->array_start        = (void *) hash_array_start;
-    sem->scalar             = (void *) hash_scalar;
-    sem->object_field_start = (void *) hash_object_field_start;
-    sem->object_field_end   = (void *) hash_object_field_end;
+    sem->array_start        = hash_array_start;
+    sem->scalar             = hash_scalar;
+    sem->object_field_start = hash_object_field_start;
+    sem->object_field_end   = hash_object_field_end;
 
 #if PG_VERSION_NUM < 130000
     pg_parse_json(lex, sem);
-#elif PG_VERSION_NUM < 160000
-    JsonParseErrorType error;
-    if ((error = pg_parse_json(lex, sem)) != JSON_SUCCESS)
-        json_ereport_error(error, lex);
-#else
-    JsonParseErrorType error;
-    Node *minimalContext = (Node *)malloc(sizeof(Node));
-    if ((error = pg_parse_json(lex, sem)) != JSON_SUCCESS)
-        json_errsave_error(error, lex,minimalContext);
-    free(minimalContext);
+#else 
+    pg_parse_json_or_ereport(lex, sem);
 #endif
 
     return tab;
 }
 
-static void
+static JsonParseErrorType
 hash_object_field_start(void *state, char *fname, bool isnull)
 {
     JHashState *_state = (JHashState *) state;
 
     if (_state->lex->lex_level > 1)
-        return;
+    return JSON_SUCCESS; 
 
     if (_state->lex->token_type == JSON_TOKEN_ARRAY_START || _state->lex->token_type == JSON_TOKEN_OBJECT_START)
     {
@@ -439,7 +431,7 @@ hash_object_field_start(void *state, char *fname, bool isnull)
     }
 }
 
-static void
+static JsonParseErrorType
 hash_object_field_end(void *state, char *fname, bool isnull)
 {
     JHashState *   _state = (JHashState *) state;
@@ -450,7 +442,7 @@ hash_object_field_end(void *state, char *fname, bool isnull)
      * Ignore nested fields.
      */
     if (_state->lex->lex_level > 1)
-        return;
+        return JSON_SUCCESS; 
 
     /*
      * Ignore field names >= NAMEDATALEN - they can't match a record field.
@@ -460,7 +452,7 @@ hash_object_field_end(void *state, char *fname, bool isnull)
      * has previously insisted on exact equality, so we keep this behavior.)
      */
     if (strlen(fname) >= NAMEDATALEN)
-        return;
+        return JSON_SUCCESS; 
 
     hashentry = hash_search(_state->hash, fname, HASH_ENTER, &found);
 
@@ -486,7 +478,7 @@ hash_object_field_end(void *state, char *fname, bool isnull)
     }
 }
 
-static void
+static JsonParseErrorType
 hash_array_start(void *state)
 {
     JHashState *_state = (JHashState *) state;
@@ -495,9 +487,11 @@ hash_array_start(void *state)
         ereport(
           ERROR,
           (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("cannot call %s on an array", _state->function_name)));
+    
+    return JSON_SUCCESS;      
 }
 
-static void
+static JsonParseErrorType
 hash_scalar(void *state, char *token, JsonTokenType tokentype)
 {
     JHashState *_state = (JHashState *) state;
@@ -509,6 +503,8 @@ hash_scalar(void *state, char *token, JsonTokenType tokentype)
 
     if (_state->lex->lex_level == 1)
         _state->saved_scalar = token;
+
+    return JSON_SUCCESS;
 }
 
 static int
