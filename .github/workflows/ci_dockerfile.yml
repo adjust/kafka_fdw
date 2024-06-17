@@ -14,6 +14,8 @@ jobs:
       matrix:
         include:
           - clang: 15
+            pg: 16
+          - clang: 15
             pg: 15
           - clang: 15
             pg: 14
