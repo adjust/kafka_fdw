@@ -40,7 +40,55 @@ ExecInitExprList(List *nodes, PlanState *parent)
     create_foreignscan_path signature has changed accros different pg versions
     kafka_create_foreignscan_path harmonizes it
 */
-#if PG_VERSION_NUM >= 90600
+
+#if PG_VERSION_NUM >= 180000
+/* PG18+: added disabled_nodes parameter and fdw_restrictinfo */
+#define kafka_create_foreignscan_path(planner_info,                                                                    \
+                                      reloptinfo,                                                                      \
+                                      pathtarget,                                                                      \
+                                      rows,                                                                            \
+                                      startup_cost,                                                                    \
+                                      total_cost,                                                                      \
+                                      pathkeys,                                                                        \
+                                      req_outer,                                                                       \
+                                      fdw_outerpath,                                                                   \
+                                      fdw_private)                                                                     \
+    (create_foreignscan_path(planner_info,                                                                             \
+                             reloptinfo,                                                                               \
+                             pathtarget,                                                                               \
+                             rows,                                                                                     \
+                             0, /* disabled_nodes */                                                                   \
+                             startup_cost,                                                                             \
+                             total_cost,                                                                               \
+                             pathkeys,                                                                                 \
+                             req_outer,                                                                                \
+                             fdw_outerpath,                                                                            \
+                             NIL, /* fdw_restrictinfo */                                                               \
+                             fdw_private))
+#elif PG_VERSION_NUM >= 170000
+/* PG17: added fdw_restrictinfo parameter */
+#define kafka_create_foreignscan_path(planner_info,                                                                    \
+                                      reloptinfo,                                                                      \
+                                      pathtarget,                                                                      \
+                                      rows,                                                                            \
+                                      startup_cost,                                                                    \
+                                      total_cost,                                                                      \
+                                      pathkeys,                                                                        \
+                                      req_outer,                                                                       \
+                                      fdw_outerpath,                                                                   \
+                                      fdw_private)                                                                     \
+    (create_foreignscan_path(planner_info,                                                                             \
+                             reloptinfo,                                                                               \
+                             pathtarget,                                                                               \
+                             rows,                                                                                     \
+                             startup_cost,                                                                             \
+                             total_cost,                                                                               \
+                             pathkeys,                                                                                 \
+                             req_outer,                                                                                \
+                             fdw_outerpath,                                                                            \
+                             NIL, /* fdw_restrictinfo */                                                               \
+                             fdw_private))
+#elif PG_VERSION_NUM >= 90600
 #define kafka_create_foreignscan_path(planner_info,                                                                    \
                                       reloptinfo,                                                                      \
                                       pathtarget,                                                                      \

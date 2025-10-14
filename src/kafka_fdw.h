@@ -12,10 +12,17 @@
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
+#if PG_VERSION_NUM >= 130000
+#include "access/relation.h"
+#endif
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
+#if PG_VERSION_NUM >= 180000
+#include "commands/explain_state.h"
+#include "commands/explain_format.h"
+#endif
 #include "commands/vacuum.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
@@ -68,6 +75,8 @@
 #define ScanopListGetOh(l) (DatumGetInt64(((Const *) list_nth(l, OffsetHigh))->constvalue))
 #define ScanopListGetPhInvinite(l) (DatumGetInt32(((Const *) list_nth(l, PartitionHigh))->constisnull))
 #define ScanopListGetOhInvinite(l) (DatumGetInt32(((Const *) list_nth(l, OffsetHigh))->constisnull))
+
+extern double kafka_tuple_cost;
 
 enum kafka_msg_format
 {

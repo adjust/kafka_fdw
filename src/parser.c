@@ -29,6 +29,13 @@ static void hash_scalar(void *state, char *token, JsonTokenType tokentype);
 
 /* encode json */
 
+#if PG_VERSION_NUM < 170000
+
+/*
+    part of utils/jsonfuncs.h since pg 17
+*/
+
+
 typedef enum /* type categories for datum_to_json */
 {
     JSONTYPE_NULL,    /* null, so we didn't bother to identify */
@@ -44,7 +51,13 @@ typedef enum /* type categories for datum_to_json */
     JSONTYPE_OTHER      /* all else */
 } JsonTypeCategory;
 
-static void json_categorize_type(Oid typoid, JsonTypeCategory *tcategory, Oid *outfuncoid);
+static void datum_to_json(Datum            val,
+                          bool             is_null,
+                          StringInfo       result,
+                          JsonTypeCategory tcategory,
+                          Oid              outfuncoid,
+                          bool             key_scalar);
+
 static void array_dim_to_json(StringInfo       result,
                               int              dim,
                               int              ndims,
@@ -57,14 +70,55 @@ static void array_dim_to_json(StringInfo       result,
                               bool             use_line_feeds);
 
 static void array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds);
-static void datum_to_json(Datum            val,
-                          bool             is_null,
-                          StringInfo       result,
-                          JsonTypeCategory tcategory,
-                          Oid              outfuncoid,
-                          bool             key_scalar);
-static void add_json(Datum val, bool is_null, StringInfo result, Oid val_type, bool key_scalar);
 static void composite_to_json(Datum composite, StringInfo result, bool use_line_feeds);
+
+#else
+
+/* Wrapper functions for PG17+ to maintain compatibility */
+static inline void kafka_json_categorize_type(Oid typoid, JsonTypeCategory *tcategory, Oid *outfuncoid)
+{
+    json_categorize_type(typoid, false, tcategory, outfuncoid);
+}
+
+static inline void kafka_datum_to_json(Datum val, bool is_null, StringInfo result,
+                                       JsonTypeCategory tcategory, Oid outfuncoid, bool key_scalar)
+{
+    if (is_null)
+    {
+        appendStringInfoString(result, "null");
+        return;
+    }
+
+    if (key_scalar && (tcategory == JSONTYPE_ARRAY || tcategory == JSONTYPE_COMPOSITE ||
+                       tcategory == JSONTYPE_JSON || tcategory == JSONTYPE_CAST))
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("key value must be scalar, not array, composite, or json")));
+    }
+
+    /* For key scalars or special types, use manual formatting */
+    if (key_scalar)
+    {
+        char *outstr = OidOutputFunctionCall(outfuncoid, val);
+        escape_json(result, outstr);
+        pfree(outstr);
+    }
+    else
+    {
+        /* Use PostgreSQL's datum_to_json */
+        Datum json_datum = datum_to_json(val, tcategory, outfuncoid);
+        text *json_text = DatumGetTextP(json_datum);
+        appendBinaryStringInfo(result, VARDATA_ANY(json_text), VARSIZE_ANY_EXHDR(json_text));
+    }
+}
+
+#define json_categorize_type kafka_json_categorize_type
+#define datum_to_json kafka_datum_to_json
+
+#endif
+
+static void add_json(Datum val, bool is_null, StringInfo result, Oid val_type, bool key_scalar);
 static int  KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
 static int  KafkaReadAttributesCSV(char *msg, int msg_len, KafkaFdwExecutionState *festate, bool *unterminated_error);
 static void KafkaWriteAttributesCSV(KafkaFdwModifyState *festate, TupleTableSlot *slot);
@@ -353,7 +407,7 @@ typedef struct JhashState
     const char *    function_name;
     HTAB *          hash;
     char *          saved_scalar;
-    char *          save_json_start;
+    const char *    save_json_start;
 } JHashState;
 
 /* hashtable element */
@@ -377,14 +431,22 @@ get_json_as_hash(char *json, int len, const char *funcname)
     HTAB *          tab;
     int             flags = HASH_ELEM | HASH_CONTEXT;
     JHashState *    state;
-#if PG_VERSION_NUM >= 130000
-    JsonLexContext *lex = makeJsonLexContextCstringLen(json, len,
-                                                       GetDatabaseEncoding(),
-                                                       true);
-#else
-    JsonLexContext *lex = makeJsonLexContextCstringLen(json, len, true);
-#endif
+    JsonLexContext *lex;
     JsonSemAction * sem;
+
+#if PG_VERSION_NUM >= 170000
+     /* PG17+ requires a JsonLexContext pointer, json string, length, encoding, and need_escapes */
+    JsonLexContext  lex_buf;
+    lex = makeJsonLexContextCstringLen(&lex_buf, json, len,
+                                        GetDatabaseEncoding(),
+                                        true);
+#elif PG_VERSION_NUM >= 130000
+    lex = makeJsonLexContextCstringLen(json, len,
+                                       GetDatabaseEncoding(),
+                                       true);
+#else
+    lex = makeJsonLexContextCstringLen(json, len, true);
+#endif
 
 #if PG_VERSION_NUM >= 140000
     flags |= HASH_STRINGS;
@@ -635,6 +697,7 @@ KafkaReadAttributesJson(char *msg, int msg_len, KafkaFdwExecutionState *festate,
  * output function OID.  If the returned category is JSONTYPE_CAST, we
  * return the OID of the type->JSON cast function instead.
  */
+#if PG_VERSION_NUM < 170000
 static void
 json_categorize_type(Oid typoid, JsonTypeCategory *tcategory, Oid *outfuncoid)
 {
@@ -815,6 +878,7 @@ array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds)
  * If key_scalar is true, the value is being printed as a key, so insist
  * it's of an acceptable type, and force it to be quoted.
  */
+
 static void
 datum_to_json(Datum val, bool is_null, StringInfo result, JsonTypeCategory tcategory, Oid outfuncoid, bool key_scalar)
 {
@@ -1008,6 +1072,8 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
     ReleaseTupleDesc(tupdesc);
 }
 
+#endif /* PG_VERSION_NUM < 170000 */
+
 /*
  * Append JSON text for "val" to "result".
  *
@@ -1073,17 +1139,3 @@ KafkaWriteAttributesJson(KafkaFdwModifyState *festate, TupleTableSlot *slot)
 
     appendStringInfoCharMacro(result, '}');
 }
-/*
-
-
-
-
-
-
-
-
-
-
-
-
-*/

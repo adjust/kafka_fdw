@@ -89,8 +89,6 @@ kafka_get_watermarks(PG_FUNCTION_ARGS)
             values[2] = high;
             tuplestore_putvalues(tupstore, tupdesc, values, nulls);
         }
-
-        tuplestore_donestoring(tupstore);
     }
     PG_CATCH();
     {
