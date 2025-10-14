@@ -5,8 +5,6 @@
 #endif
 
 
-extern double kafka_tuple_cost;
-
 
 /*
  * Estimate size of a foreign table.

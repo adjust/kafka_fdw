@@ -6,14 +6,20 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
-#if PG_VERSION_NUM >= 130000
-#include "access/relation.h"
-#endif
-
 PG_MODULE_MAGIC;
 
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
 #define STEP_FACTOR 20
+
+#if PG_VERSION_NUM >= 160000
+    #define PG_TRY_ARGS(...) PG_TRY(__VA_ARGS__)
+    #define PG_CATCH_ARGS(...) PG_CATCH(__VA_ARGS__)
+    #define PG_END_TRY_ARGS(...) PG_END_TRY(__VA_ARGS__)
+#else
+    #define PG_TRY_ARGS(...) PG_TRY()
+    #define PG_CATCH_ARGS(...) PG_CATCH()
+    #define PG_END_TRY_ARGS(...) PG_END_TRY()
+#endif
 
 double kafka_tuple_cost = 0.2f;
 
@@ -1654,7 +1660,7 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
                 /* Not empty dataset obtained */
                 if (rows_fetched > 0)
                 {
-                    PG_TRY();
+                    PG_TRY_ARGS(spl);
                     {
                         for (m = 0; m < rows_fetched; m++)
                         {
@@ -1684,7 +1690,7 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
                             rd_kafka_message_destroy(messages[m]);
                         }
                     }
-                    PG_CATCH();
+                    PG_CATCH_ARGS(spl);
                     {
                         /*
                          * If any error occurs during parsing messages we should
@@ -1698,7 +1704,7 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
 
                         PG_RE_THROW();
                     }
-                    PG_END_TRY();
+                    PG_END_TRY_ARGS(spl);
                 }
                 /* Error */
                 else if (rows_fetched < 0)
