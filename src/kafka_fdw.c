@@ -362,12 +362,12 @@ KafkaScanOpListToString(List *scanop)
     }
 
     if (ScanopListGetOh(scanop) == ScanopListGetOl(scanop))
-        appendStringInfo(&buf, " AND OFFSET = %ld", ScanopListGetOl(scanop));
+        appendStringInfo(&buf, " AND OFFSET = " INT64_FORMAT, ScanopListGetOl(scanop));
     else
     {
-        appendStringInfo(&buf, " AND OFFSET >= %ld", ScanopListGetOl(scanop));
+        appendStringInfo(&buf, " AND OFFSET >= " INT64_FORMAT, ScanopListGetOl(scanop));
         if (!ScanopListGetOhInvinite(scanop))
-            appendStringInfo(&buf, " AND OFFSET <= %ld", ScanopListGetOh(scanop));
+            appendStringInfo(&buf, " AND OFFSET <= " INT64_FORMAT, ScanopListGetOh(scanop));
     }
 
     return buf.data;
@@ -408,10 +408,10 @@ kafkaExplainForeignScan(ForeignScanState *node, ExplainState *es)
                 initStringInfo(&buf);
                 p = &festate->scan_data->data[i];
                 DEBUGLOG("p %d, of %ld, ofl %ld", p->partition, p->offset, p->offset_lim);
-                appendStringInfo(&buf, "PARTITION %d AND OFFSET >= %ld", p->partition, p->offset);
+                appendStringInfo(&buf, "PARTITION %d AND OFFSET >= " INT64_FORMAT, p->partition, p->offset);
 
                 if (p->offset_lim != -1)
-                    appendStringInfo(&buf, " AND OFFSET <= %ld", p->offset_lim);
+                    appendStringInfo(&buf, " AND OFFSET <= " INT64_FORMAT, p->offset_lim);
 
                 ExplainPropertyText("scanning", buf.data, es);
             }
