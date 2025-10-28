@@ -13,6 +13,9 @@ OBJS         =  $(patsubst %.c,%.o,$(wildcard src/*.c))
 PG_CONFIG   ?= pg_config
 PG_CPPFLAGS  = -std=c99 -Wall -Wextra -Wno-unused-parameter
 
+
+PLATFORM 	 = $(shell uname -s)
+
 ifndef NOINIT
 REGRESS_PREP = prep_kafka
 endif
@@ -21,28 +24,25 @@ ifdef DEBUG
 PG_CPPFLAGS+= -DDO_DEBUG
 endif
 
-PGXS := $(shell $(PG_CONFIG) --pgxs)
-include $(PGXS)
-
-ifeq ($(shell test $(VERSION_NUM) -lt 100000; echo $$?),0)
-REGRESS := $(filter-out parallel, $(REGRESS))
-endif
-
-
-PLATFORM 	 = $(shell uname -s)
-
 ifeq ($(PLATFORM),Darwin)
-SHLIB_LINK += -lrdkafka -lz -lpthread
-PG_LIBS += -lrdkafka -lz -lpthread
+PG_CPPFLAGS += -I/opt/homebrew/include
+SHLIB_LINK += -lrdkafka -lz -lpthread -L/opt/homebrew/opt/librdkafka/lib -lrdkafka
+PG_LIBS += -lrdkafka -lz -lpthread -L/opt/homebrew/opt/librdkafka/lib -lrdkafka
 else
 SHLIB_LINK += -lrdkafka -lz -lpthread -lrt
 PG_LIBS += -lrdkafka -lz -lpthread -lrt
+endif
+
+ifeq ($(shell test $(VERSION_NUM) -lt 100000; echo $$?),0)
+REGRESS := $(filter-out parallel, $(REGRESS))
 endif
 
 ifdef TEST
 REGRESS = $(TEST)
 endif
 
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+include $(PGXS)
 
 all: $(EXTENSION)--$(EXTVERSION).sql
 
