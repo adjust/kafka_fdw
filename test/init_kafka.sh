@@ -28,14 +28,14 @@ json_topic="contrib_regress_json"
 json_junk_topic="contrib_regress_json_junk"
 
 out_sql="SELECT i as int_val, 'It''s some text, that is for number '||i as text_val, ('2015-01-01'::date + (i || ' seconds')::interval)::date as date_val, ('2015-01-01'::date + (i || ' seconds')::interval)::timestamp as time_val FROM generate_series(1,1e6::int, 10) i ORDER BY i"
-kafka_cmd="$KAFKA_PRODUCER --broker-list localhost:9092 --topic"
+kafka_cmd="$KAFKA_PRODUCER --bootstrap-server localhost:9092 --topic"
 
 # delete topic if it might exist
-for t in "${topics[@]}"; do $KAFKA_TOPICS --zookeeper localhost:2181 --delete --topic ${t} & done; wait
+for t in "${topics[@]}"; do $KAFKA_TOPICS -bootstrap-server localhost:9092 --delete --topic ${t} & done; wait
 
 
 # create topics with partitions
-for t in "${toppart[@]}"; do $KAFKA_TOPICS --zookeeper localhost:2181 --create ${t} --replication-factor 1 & done; wait
+for t in "${toppart[@]}"; do $KAFKA_TOPICS -bootstrap-server localhost:9092 --create ${t} --replication-factor 1 & done; wait
 
 # write some test data to topicc
 $BIN/psql -c "COPY(SELECT json_build_object('int_val',int_val, 'text_val',text_val, 'date_val',date_val, 'time_val', time_val ) FROM (${out_sql}) t) TO STDOUT (FORMAT TEXT);" -d postgres -o "| ${kafka_cmd} ${json_topic}" >/dev/null &

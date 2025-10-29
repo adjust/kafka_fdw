@@ -28,13 +28,11 @@ ifeq ($(PLATFORM),Darwin)
 PG_CPPFLAGS += -I/opt/homebrew/include
 SHLIB_LINK += -lrdkafka -lz -lpthread -L/opt/homebrew/opt/librdkafka/lib -lrdkafka
 PG_LIBS += -lrdkafka -lz -lpthread -L/opt/homebrew/opt/librdkafka/lib -lrdkafka
+export KAFKA_PRODUCER = kafka-console-producer
+export KAFKA_TOPICS = kafka-topics
 else
 SHLIB_LINK += -lrdkafka -lz -lpthread -lrt
 PG_LIBS += -lrdkafka -lz -lpthread -lrt
-endif
-
-ifeq ($(shell test $(VERSION_NUM) -lt 100000; echo $$?),0)
-REGRESS := $(filter-out parallel, $(REGRESS))
 endif
 
 ifdef TEST
