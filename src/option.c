@@ -325,6 +325,9 @@ is_valid_option(const char *option, Oid context)
 {
     const struct KafkaFdwOption *opt;
 
+    if (option[0] == '#')
+        return true;
+
     for (opt = valid_options; opt->optname; opt++)
     {
         if (context == opt->optcontext && strcmp(opt->optname, option) == 0)
@@ -353,7 +356,12 @@ KafkaProcessKafkaOptions(Oid relid, KafkaOptions *kafka_options, List *options)
     {
         DefElem *def = (DefElem *) lfirst(option);
 
-        if (strcmp(def->defname, "topic") == 0)
+        if (def->defname[0] == '#')
+        {
+            kafka_options->options = lappend(kafka_options->options, def);
+        }
+
+        else if (strcmp(def->defname, "topic") == 0)
         {
             if (kafka_options->topic)
                 ereport(ERROR,

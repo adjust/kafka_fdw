@@ -8,6 +8,7 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
     rd_kafka_topic_conf_t *topic_conf         = NULL;
     rd_kafka_conf_t *      conf;
     char                   errstr[KAFKA_MAX_ERR_MSG];
+    ListCell              *option;
 
     /* brokers and topic should be validated just double check */
 
@@ -19,6 +20,15 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
     if (rd_kafka_conf_set(conf, "bootstrap.servers", k_options->brokers,
                           errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
         elog(ERROR, "%s\n", errstr);
+
+    foreach (option, k_options->options)
+    {
+        DefElem *def = (DefElem *) lfirst(option);
+
+        if (rd_kafka_conf_set(conf, def->defname + 1, defGetString(def),
+                            errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+            elog(ERROR, "%s\n", errstr);
+    }
 
     *kafka_handle = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
 
