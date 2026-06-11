@@ -77,13 +77,15 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
  * via rd_kafka_assign() + rd_kafka_consumer_poll().  We never subscribe and
  * never commit offsets, so no consumer group is joined.
  *
- * librdkafka permits omitting group.id only when enable.auto.commit is
- * explicitly set to false (KIP-289); otherwise rd_kafka_new() fails with
- * "enable.auto.commit must be explicitly set to false when group.id is not
- * configured".  On librdkafka versions that still require group.id even for
- * assign(), set a fixed dummy group.id (e.g. "kafka_fdw") here in addition to
- * enable.auto.commit=false - that still results in no group activity.
+ * librdkafka requires a group.id to instantiate a consumer that uses
+ * rd_kafka_assign() - without it the assign call fails with
+ * "Local: Unknown group" (RD_KAFKA_RESP_ERR__UNKNOWN_GROUP).  We therefore
+ * configure a fixed group.id together with enable.auto.commit=false.  Because
+ * we only ever assign() (never subscribe()) and never commit offsets, no
+ * actual consumer group is joined: there is no rebalancing and no group
+ * coordinator traffic - the group.id is just a required configuration value.
  */
+#define KAFKA_FDW_GROUP_ID "kafka_fdw"
 void
 KafkaFdwGetConsumer(KafkaOptions *k_options,
                     rd_kafka_t **kafka_handle,
@@ -103,7 +105,17 @@ KafkaFdwGetConsumer(KafkaOptions *k_options,
         elog(ERROR, "%s", errstr);
     }
 
-    /* required to run without a group.id (see function comment) */
+    /*
+     * A group.id is required for rd_kafka_assign() (see function comment).
+     * Combined with enable.auto.commit=false and assign-only usage this stays
+     * effectively group-less: no rebalancing, no offset commits.
+     */
+    if (rd_kafka_conf_set(conf, "group.id", KAFKA_FDW_GROUP_ID, errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+    {
+        rd_kafka_conf_destroy(conf);
+        elog(ERROR, "%s", errstr);
+    }
+
     if (rd_kafka_conf_set(conf, "enable.auto.commit", "false", errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
     {
         rd_kafka_conf_destroy(conf);
