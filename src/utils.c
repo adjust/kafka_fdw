@@ -84,9 +84,9 @@ kafka_get_watermarks(PG_FUNCTION_ARGS)
                                          rd_kafka_err2str(err))));
             }
 
-            values[0] = p;
-            values[1] = low;
-            values[2] = high;
+            values[0] = Int32GetDatum(p);
+            values[1] = Int64GetDatum(low);
+            values[2] = Int64GetDatum(high);
             tuplestore_putvalues(tupstore, tupdesc, values, nulls);
         }
     }

@@ -11,6 +11,14 @@ PG_MODULE_MAGIC;
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
 #define STEP_FACTOR 20
 
+/*
+ * Number of consecutive empty consume batches (no data within buffer_delay)
+ * that we tolerate before giving up on a partition.  The authoritative
+ * end-of-partition signal is RD_KAFKA_RESP_ERR__PARTITION_EOF; this is only a
+ * safety bound to avoid looping forever if a broker becomes unresponsive.
+ */
+#define KAFKA_MAX_EMPTY_POLLS 3
+
 #if PG_VERSION_NUM >= 160000
     #define PG_TRY_ARGS(...) PG_TRY(__VA_ARGS__)
     #define PG_CATCH_ARGS(...) PG_CATCH(__VA_ARGS__)
@@ -681,6 +689,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     MemoryContext           ccxt          = CurrentMemoryContext;
     KafkaScanDataDesc *     scand         = festate->scan_data_desc;
     int                     param_num     = 0;
+    int                     empty_polls   = 0;
     KafkaScanP *            scan_p;
 
     /* first run eval expressions and setup working list */
@@ -811,14 +820,28 @@ kafkaIterateForeignScan(ForeignScanState *node)
               (errcode(ERRCODE_FDW_ERROR),
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
-        if (festate->buffer_count <= 0) /* no more messages within timeout*/
+        if (festate->buffer_count <= 0) /* no data within the poll timeout */
         {
+            /*
+             * An empty batch does NOT mean the partition is exhausted - that
+             * is signalled by an explicit RD_KAFKA_RESP_ERR__PARTITION_EOF
+             * message (enable.partition.eof is turned on in connection.c).
+             * An empty batch only means no message arrived within
+             * buffer_delay (e.g. a slow or still in-flight fetch), so retry
+             * the same partition a few times before giving up to avoid
+             * silently skipping unread messages.
+             */
+            if (++empty_polls < KAFKA_MAX_EMPTY_POLLS)
+                continue; /* retry the same partition */
+
+            empty_polls = 0;
             if (!kafkaNext(festate))
                 return slot;
         }
         else
         {
-            message = festate->buffer[festate->buffer_cursor];
+            empty_polls = 0; /* got data, reset the empty-poll counter */
+            message     = festate->buffer[festate->buffer_cursor];
             if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
             {
                 DEBUGLOG("kafka_fdw has reached the end of the queue 2");
@@ -1375,8 +1398,11 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     rkt = rd_kafka_topic_new(rk, kafka_options.topic, NULL);
     if (!rkt)
     {
-        elog(ERROR, "%% Failed to create topic object: %s\n", rd_kafka_err2str(rd_kafka_last_error()));
+        rd_kafka_resp_err_t last_error = rd_kafka_last_error();
+
+        /* destroy the producer before erroring out, elog(ERROR) does not return */
         rd_kafka_destroy(rk);
+        elog(ERROR, "%% Failed to create topic object: %s\n", rd_kafka_err2str(last_error));
     }
 
     festate->kafka_topic_handle = rkt;
@@ -1428,10 +1454,13 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
         KafkaWriteAttributes(festate, slot, festate->parse_options.format);
     }
 
-    /* fetch partition if given */
-    value = slot_getattr(slot, festate->kafka_options.partition_attnum, &isnull);
-    if (!isnull)
-        partition = DatumGetInt32(value);
+    /* fetch partition if a partition column is configured */
+    if (festate->kafka_options.partition_attnum != -1)
+    {
+        value = slot_getattr(slot, festate->kafka_options.partition_attnum, &isnull);
+        if (!isnull)
+            partition = DatumGetInt32(value);
+    }
 
     DEBUGLOG("Message: %s", festate->attribute_buf.data);
 
@@ -1563,6 +1592,7 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
     volatile bool           catched_error = false;
     volatile int            cnt           = 0;
     volatile int64          total         = 0;
+    volatile bool           enough        = false;
 
     /* Initialize execution state */
     kafkaGetOptions(RelationGetRelid(relation), &kafka_options, &parse_options);
@@ -1622,6 +1652,9 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
             volatile int   m;
             volatile bool  done = false;
 
+            if (enough) /* collected enough sample rows already */
+                break;
+
             /*
              * Ideally we need to peak individual messages from the partition evenly for
              * statistics to be more accurate. Unfortunatelly it leads to a very slow
@@ -1668,10 +1701,25 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
 
                             if (err == RD_KAFKA_RESP_ERR_NO_ERROR)
                             {
-                                ReadKafkaMessage(relation, festate, messages[m], CurrentMemoryContext, &values, &nulls);
-
-                                Assert(cnt <= targrows);
-                                rows[cnt++] = heap_form_tuple(RelationGetDescr(relation), values, nulls);
+                                /*
+                                 * Never write past the caller supplied rows
+                                 * array (it holds at most targrows entries).
+                                 * Once it is full we keep draining/destroying
+                                 * the already fetched messages but stop
+                                 * collecting and signal the outer loops to
+                                 * finish.
+                                 */
+                                if (cnt < targrows)
+                                {
+                                    ReadKafkaMessage(
+                                      relation, festate, messages[m], CurrentMemoryContext, &values, &nulls);
+                                    rows[cnt++] = heap_form_tuple(RelationGetDescr(relation), values, nulls);
+                                }
+                                else
+                                {
+                                    enough = true;
+                                    done   = true;
+                                }
                             }
                             else if (err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
                             {
