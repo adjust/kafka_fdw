@@ -865,6 +865,21 @@ kafkaIterateForeignScan(ForeignScanState *node)
                          errmsg_internal("kafka_fdw got an error %s when fetching a message from queue",
                                          rd_kafka_err2str(message->err))));
             }
+            /*
+             * Enforce the requested upper offset bound on the freshly polled
+             * message.  With the legacy batch consumer this was handled by the
+             * top-of-function check on messages still buffered from a previous
+             * rd_kafka_consume_batch().  Since we now poll a single message at a
+             * time that buffer is always drained, so the check would never fire
+             * and we would read the whole partition.  scan_p points at the
+             * current partition's scan item (set at the top of this loop).
+             */
+            else if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
+            {
+                DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
+                if (!kafkaNext(festate))
+                    return slot;
+            }
         }
     }
 
