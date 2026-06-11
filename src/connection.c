@@ -29,9 +29,12 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
 
         if (rd_kafka_topic_conf_set(topic_conf, "auto.commit.enable", "false", errstr, KAFKA_MAX_ERR_MSG) !=
             RD_KAFKA_CONF_OK)
+        {
+            rd_kafka_topic_conf_destroy(topic_conf);
             ereport(
               ERROR,
               (errcode(ERRCODE_FDW_ERROR), errmsg_internal("kafka_fdw: Unable to create topic %s", k_options->topic)));
+        }
 
         *kafka_topic_handle = rd_kafka_topic_new(*kafka_handle, k_options->topic, topic_conf);
         if (!*kafka_topic_handle)
@@ -43,6 +46,11 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
     }
     else
     {
+        /*
+         * On failure rd_kafka_new() does NOT take ownership of conf, so we
+         * must free it ourselves to avoid leaking it.
+         */
+        rd_kafka_conf_destroy(conf);
         ereport(ERROR,
                 (errcode(ERRCODE_FDW_UNABLE_TO_ESTABLISH_CONNECTION),
                  errmsg_internal("kafka_fdw: Unable to connect to %s", k_options->brokers),

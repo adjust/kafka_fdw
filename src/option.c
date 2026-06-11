@@ -442,11 +442,12 @@ get_kafka_fdw_attribute_options(Oid relid, KafkaOptions *kafka_options)
         Form_pg_attribute attr = TupleDescAttr(tupleDesc, attnum - 1);
         List *            options;
         ListCell *        lc;
-        kafka_options->num_parse_col++;
 
-        /* Skip dropped attributes. */
+        /* Skip dropped attributes - they are not part of the parsed data. */
         if (attr->attisdropped)
             continue;
+
+        kafka_options->num_parse_col++;
 
         options = GetForeignColumnOptions(relid, attnum);
         foreach (lc, options)

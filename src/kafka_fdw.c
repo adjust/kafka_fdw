@@ -1375,8 +1375,11 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     rkt = rd_kafka_topic_new(rk, kafka_options.topic, NULL);
     if (!rkt)
     {
-        elog(ERROR, "%% Failed to create topic object: %s\n", rd_kafka_err2str(rd_kafka_last_error()));
+        rd_kafka_resp_err_t last_error = rd_kafka_last_error();
+
+        /* destroy the producer before erroring out, elog(ERROR) does not return */
         rd_kafka_destroy(rk);
+        elog(ERROR, "%% Failed to create topic object: %s\n", rd_kafka_err2str(last_error));
     }
 
     festate->kafka_topic_handle = rkt;
@@ -1428,10 +1431,13 @@ kafkaExecForeignInsert(EState *estate, ResultRelInfo *rinfo, TupleTableSlot *slo
         KafkaWriteAttributes(festate, slot, festate->parse_options.format);
     }
 
-    /* fetch partition if given */
-    value = slot_getattr(slot, festate->kafka_options.partition_attnum, &isnull);
-    if (!isnull)
-        partition = DatumGetInt32(value);
+    /* fetch partition if a partition column is configured */
+    if (festate->kafka_options.partition_attnum != -1)
+    {
+        value = slot_getattr(slot, festate->kafka_options.partition_attnum, &isnull);
+        if (!isnull)
+            partition = DatumGetInt32(value);
+    }
 
     DEBUGLOG("Message: %s", festate->attribute_buf.data);
 
@@ -1563,6 +1569,7 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
     volatile bool           catched_error = false;
     volatile int            cnt           = 0;
     volatile int64          total         = 0;
+    volatile bool           enough        = false;
 
     /* Initialize execution state */
     kafkaGetOptions(RelationGetRelid(relation), &kafka_options, &parse_options);
@@ -1622,6 +1629,9 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
             volatile int   m;
             volatile bool  done = false;
 
+            if (enough) /* collected enough sample rows already */
+                break;
+
             /*
              * Ideally we need to peak individual messages from the partition evenly for
              * statistics to be more accurate. Unfortunatelly it leads to a very slow
@@ -1668,10 +1678,25 @@ kafkaAcquireSampleRowsFunc(Relation   relation,
 
                             if (err == RD_KAFKA_RESP_ERR_NO_ERROR)
                             {
-                                ReadKafkaMessage(relation, festate, messages[m], CurrentMemoryContext, &values, &nulls);
-
-                                Assert(cnt <= targrows);
-                                rows[cnt++] = heap_form_tuple(RelationGetDescr(relation), values, nulls);
+                                /*
+                                 * Never write past the caller supplied rows
+                                 * array (it holds at most targrows entries).
+                                 * Once it is full we keep draining/destroying
+                                 * the already fetched messages but stop
+                                 * collecting and signal the outer loops to
+                                 * finish.
+                                 */
+                                if (cnt < targrows)
+                                {
+                                    ReadKafkaMessage(
+                                      relation, festate, messages[m], CurrentMemoryContext, &values, &nulls);
+                                    rows[cnt++] = heap_form_tuple(RelationGetDescr(relation), values, nulls);
+                                }
+                                else
+                                {
+                                    enough = true;
+                                    done   = true;
+                                }
                             }
                             else if (err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
                             {

@@ -225,7 +225,7 @@ partion_member(KafkaPartitionList *partition_list, int32 search_partition)
 {
     int32 first, last, middle;
     first  = 0;
-    last   = partition_list->partition_cnt;
+    last   = partition_list->partition_cnt - 1;
     middle = (first + last) / 2;
 
     while (first <= last)
