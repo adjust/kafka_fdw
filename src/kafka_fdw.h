@@ -262,6 +262,15 @@ void KafkaFdwGetConnection(KafkaOptions *k_options,
                            rd_kafka_t **kafka_handle,
                            rd_kafka_topic_t **kafka_topic_handle);
 
+/*
+ * Group-less high-level consumer used by the scan path: consumption is driven
+ * purely via rd_kafka_assign() + rd_kafka_consumer_poll(), no consumer group is
+ * joined and no offsets are committed.
+ */
+void KafkaFdwGetConsumer(KafkaOptions *k_options,
+                         rd_kafka_t **kafka_handle,
+                         rd_kafka_topic_t **kafka_topic_handle);
+
 void kafkaCloseConnection(KafkaFdwExecutionState *festate);
 
 /* option.c */

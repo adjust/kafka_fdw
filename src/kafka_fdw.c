@@ -578,10 +578,10 @@ kafkaBeginForeignScan(ForeignScanState *node, int eflags)
      * Init Kafka-related stuff
      */
 
-    /* Open connection if possible */
-    KafkaFdwGetConnection(&kafka_options,
-                          &festate->kafka_handle,
-                          &festate->kafka_topic_handle);
+    /* Open a group-less high-level consumer (assign + poll) for the scan */
+    KafkaFdwGetConsumer(&kafka_options,
+                        &festate->kafka_handle,
+                        &festate->kafka_topic_handle);
 
     festate->partition_list = getPartitionList(festate->kafka_handle,
                                                festate->kafka_topic_handle);
@@ -806,19 +806,29 @@ kafkaIterateForeignScan(ForeignScanState *node)
         scan_p = &festate->scan_data->data[festate->scan_data->cursor];
 
         DEBUGLOG("start consume");
-        festate->buffer_count = rd_kafka_consume_batch(festate->kafka_topic_handle,
-                                                       scan_p->partition,
-                                                       kafka_options->buffer_delay,
-                                                       festate->buffer,
-                                                       kafka_options->batch_size);
+        /*
+         * High-level consumer: poll a single message from the currently
+         * assigned partition.  rd_kafka_consumer_poll() returns NULL on
+         * timeout (no data within buffer_delay) or a message - which may also
+         * carry an error/EOF marker in message->err, handled below.  We reuse
+         * the existing buffer[]/buffer_count/buffer_cursor machinery with a
+         * batch of at most one.
+         */
+        {
+            rd_kafka_message_t *polled = rd_kafka_consumer_poll(festate->kafka_handle, kafka_options->buffer_delay);
+
+            if (polled == NULL)
+            {
+                festate->buffer_count = 0;
+            }
+            else
+            {
+                festate->buffer[0]    = polled;
+                festate->buffer_count = 1;
+            }
+        }
         DEBUGLOG("done consume %zd", festate->buffer_count);
         festate->buffer_cursor = 0;
-
-        if (festate->buffer_count == -1)
-            ereport(
-              ERROR,
-              (errcode(ERRCODE_FDW_ERROR),
-               errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
         if (festate->buffer_count <= 0) /* no data within the poll timeout */
         {
@@ -854,6 +864,21 @@ kafkaIterateForeignScan(ForeignScanState *node)
                         (errcode(ERRCODE_FDW_ERROR),
                          errmsg_internal("kafka_fdw got an error %s when fetching a message from queue",
                                          rd_kafka_err2str(message->err))));
+            }
+            /*
+             * Enforce the requested upper offset bound on the freshly polled
+             * message.  With the legacy batch consumer this was handled by the
+             * top-of-function check on messages still buffered from a previous
+             * rd_kafka_consume_batch().  Since we now poll a single message at a
+             * time that buffer is always drained, so the check would never fire
+             * and we would read the whole partition.  scan_p points at the
+             * current partition's scan item (set at the top of this loop).
+             */
+            else if (scan_p->offset_lim >= 0 && scan_p->offset_lim < message->offset)
+            {
+                DEBUGLOG("kafka_fdw has reached the end of requested offset in queue");
+                if (!kafkaNext(festate))
+                    return slot;
             }
         }
     }
@@ -1127,13 +1152,20 @@ kafkaStop(KafkaFdwExecutionState *festate)
 
     scan_p = &scan_data->data[scan_data->cursor];
 
-    if (rd_kafka_consume_stop(festate->kafka_topic_handle, scan_p->partition) == -1)
+    /*
+     * Stop consuming by clearing the assignment.  We always assign exactly one
+     * partition at a time, so unassigning all is equivalent to stopping the
+     * current partition.  Replaces the legacy rd_kafka_consume_stop().
+     */
     {
-        rd_kafka_resp_err_t err = rd_kafka_last_error();
-        ereport(ERROR,
-                (errcode(ERRCODE_FDW_ERROR),
-                 errmsg_internal(
-                   "kafka_fdw: Failed to stop consuming partition %d:  %s", scan_p->partition, rd_kafka_err2str(err))));
+        rd_kafka_resp_err_t err = rd_kafka_assign(festate->kafka_handle, NULL);
+
+        if (err != RD_KAFKA_RESP_ERR_NO_ERROR)
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_ERROR),
+                     errmsg_internal("kafka_fdw: Failed to stop consuming partition %d:  %s",
+                                     scan_p->partition,
+                                     rd_kafka_err2str(err))));
     }
 
     /* release unconsumed messages */
@@ -1187,13 +1219,28 @@ kafkaStart(KafkaFdwExecutionState *festate)
              low,
              festate->kafka_options.topic);
 
-    /* Start consuming */
-    if (rd_kafka_consume_start(festate->kafka_topic_handle, scan_p->partition, MAX(low, scan_p->offset)) == -1)
+    /*
+     * Start consuming the partition by assigning it with an explicit start
+     * offset.  This replaces the legacy rd_kafka_consume_start(); messages are
+     * then retrieved via rd_kafka_consumer_poll() in kafkaIterateForeignScan.
+     * We assign a single partition at a time to preserve the per-partition
+     * offset-range scan semantics.
+     */
     {
-        err = rd_kafka_last_error();
-        ereport(ERROR,
-                (errcode(ERRCODE_FDW_ERROR),
-                 errmsg_internal("kafka_fdw: Failed to start consuming: %s", rd_kafka_err2str(err))));
+        rd_kafka_topic_partition_list_t *tpl = rd_kafka_topic_partition_list_new(1);
+
+        rd_kafka_topic_partition_list_add(tpl, festate->kafka_options.topic, scan_p->partition)->offset =
+          MAX(low, scan_p->offset);
+
+        err = rd_kafka_assign(festate->kafka_handle, tpl);
+        rd_kafka_topic_partition_list_destroy(tpl);
+
+        if (err != RD_KAFKA_RESP_ERR_NO_ERROR)
+            ereport(ERROR,
+                    (errcode(ERRCODE_FDW_ERROR),
+                     errmsg_internal("kafka_fdw: Failed to assign partition %d: %s",
+                                     scan_p->partition,
+                                     rd_kafka_err2str(err))));
     }
     return true;
 }
