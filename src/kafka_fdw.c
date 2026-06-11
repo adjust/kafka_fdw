@@ -11,6 +11,14 @@ PG_MODULE_MAGIC;
 #define MAX(_a, _b) ((_a > _b) ? _a : _b)
 #define STEP_FACTOR 20
 
+/*
+ * Number of consecutive empty consume batches (no data within buffer_delay)
+ * that we tolerate before giving up on a partition.  The authoritative
+ * end-of-partition signal is RD_KAFKA_RESP_ERR__PARTITION_EOF; this is only a
+ * safety bound to avoid looping forever if a broker becomes unresponsive.
+ */
+#define KAFKA_MAX_EMPTY_POLLS 3
+
 #if PG_VERSION_NUM >= 160000
     #define PG_TRY_ARGS(...) PG_TRY(__VA_ARGS__)
     #define PG_CATCH_ARGS(...) PG_CATCH(__VA_ARGS__)
@@ -681,6 +689,7 @@ kafkaIterateForeignScan(ForeignScanState *node)
     MemoryContext           ccxt          = CurrentMemoryContext;
     KafkaScanDataDesc *     scand         = festate->scan_data_desc;
     int                     param_num     = 0;
+    int                     empty_polls   = 0;
     KafkaScanP *            scan_p;
 
     /* first run eval expressions and setup working list */
@@ -811,14 +820,28 @@ kafkaIterateForeignScan(ForeignScanState *node)
               (errcode(ERRCODE_FDW_ERROR),
                errmsg_internal("kafka_fdw got an error fetching data %s", rd_kafka_err2str(rd_kafka_last_error()))));
 
-        if (festate->buffer_count <= 0) /* no more messages within timeout*/
+        if (festate->buffer_count <= 0) /* no data within the poll timeout */
         {
+            /*
+             * An empty batch does NOT mean the partition is exhausted - that
+             * is signalled by an explicit RD_KAFKA_RESP_ERR__PARTITION_EOF
+             * message (enable.partition.eof is turned on in connection.c).
+             * An empty batch only means no message arrived within
+             * buffer_delay (e.g. a slow or still in-flight fetch), so retry
+             * the same partition a few times before giving up to avoid
+             * silently skipping unread messages.
+             */
+            if (++empty_polls < KAFKA_MAX_EMPTY_POLLS)
+                continue; /* retry the same partition */
+
+            empty_polls = 0;
             if (!kafkaNext(festate))
                 return slot;
         }
         else
         {
-            message = festate->buffer[festate->buffer_cursor];
+            empty_polls = 0; /* got data, reset the empty-poll counter */
+            message     = festate->buffer[festate->buffer_cursor];
             if (message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF)
             {
                 DEBUGLOG("kafka_fdw has reached the end of the queue 2");

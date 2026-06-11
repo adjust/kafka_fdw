@@ -20,6 +20,17 @@ KafkaFdwGetConnection(KafkaOptions *k_options,
                           errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
         elog(ERROR, "%s\n", errstr);
 
+    /*
+     * Emit an explicit RD_KAFKA_RESP_ERR__PARTITION_EOF marker when a
+     * partition is exhausted.  This defaults to false in librdkafka, in which
+     * case the only end-of-partition signal would be an empty batch within the
+     * poll timeout - which is unreliable because a slow/in-flight fetch also
+     * yields an empty batch and would make us skip unread messages.
+     */
+    if (rd_kafka_conf_set(conf, "enable.partition.eof", "true",
+                          errstr, sizeof(errstr)) != RD_KAFKA_CONF_OK)
+        elog(ERROR, "%s\n", errstr);
+
     *kafka_handle = rd_kafka_new(RD_KAFKA_CONSUMER, conf, errstr, KAFKA_MAX_ERR_MSG);
 
     if (*kafka_handle != NULL)
