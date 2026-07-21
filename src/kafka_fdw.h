@@ -229,8 +229,7 @@ typedef struct KafkaFdwExecutionState
     KafkaParamValue *    param_values;       /* param_value List matching exec_expr */
     KafkaPartitionList * partition_list;     /* list and count of partitions */
     KafkaScanPData *     scan_data;          /* scan data list  */
-    StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
-    char **              attnames;           /* pointer into attname_buf */
+    char **              attnames;           /* one pstrdup'd json key per column */
     KafkaScanDataDesc *  scan_data_desc;     /* coordination point for parallel scans */
 } KafkaFdwExecutionState;
 
@@ -253,8 +252,7 @@ typedef struct KafkaFdwModifyState
     Oid *                typioparams;        /* array of element types for out_functions */
     List *               attnumlist;         /* integer list of attnums to copy */
     List *               partition_list;     /* integer list of partitions */
-    StringInfoData       attname_buf;        /* buffer holding attribute names for json format */
-    char **              attnames;           /* pointer into attname_buf */
+    char **              attnames;           /* one pstrdup'd json key per column */
 
 } KafkaFdwModifyState;
 /* connection.c */

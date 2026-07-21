@@ -77,7 +77,7 @@ static void kafkaEndForeignModify(EState *estate, ResultRelInfo *rinfo);
 
 static int kafkaIsForeignRelUpdatable(Relation rel);
 
-static char *getJsonAttname(Form_pg_attribute attr, StringInfo buff);
+static char *getJsonAttname(Form_pg_attribute attr);
 static int   next_work(KafkaScanPData *scan_p, KafkaScanDataDesc *scand);
 static bool  kafkaAnalyzeForeignTable(Relation relation, AcquireSampleRowsFunc *func, BlockNumber *totalpages);
 static int   kafkaAcquireSampleRowsFunc(Relation   relation,
@@ -488,7 +488,6 @@ makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOpt
     /* if we use json we need attnames */
     if (parse_options->format == JSON)
     {
-        initStringInfo(&festate->attname_buf);
         festate->attnames = palloc0(num_phys_attrs * sizeof(char *));
     }
 
@@ -518,7 +517,7 @@ makeKafkaExecutionState(Relation relation, KafkaOptions *kafka_options, ParseOpt
 
         if (parse_options->format == JSON)
         {
-            festate->attnames[attnum - 1] = getJsonAttname(attr, &festate->attname_buf);
+            festate->attnames[attnum - 1] = getJsonAttname(attr);
             if (type_is_array(attr->atttypid))
                 festate->attisarray = bms_add_member(festate->attisarray, attnum - 1);
         }
@@ -1303,7 +1302,6 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
     /* if we use json we need attnames and oids */
     if (parse_options.format == JSON)
     {
-        initStringInfo(&festate->attname_buf);
         festate->attnames    = palloc0(sizeof(char *) * n_params);
         festate->typioparams = (Oid *) palloc(n_params * sizeof(Oid));
     }
@@ -1328,7 +1326,7 @@ kafkaBeginForeignModify(ModifyTableState *mtstate,
 
         if (parse_options.format == JSON)
         {
-            festate->attnames[num]    = getJsonAttname(attr, &festate->attname_buf);
+            festate->attnames[num]    = getJsonAttname(attr);
             festate->typioparams[num] = attr->atttypid;
             DEBUGLOG("type oid %u", attr->atttypid);
         }
@@ -1496,35 +1494,25 @@ kafkaEndForeignModify(EState *estate, ResultRelInfo *rinfo)
 }
 
 /*
-    appends the attributes json option to buff and
-    returns a pointer to it
-    if no such option is found attributes attname is used
-*/
+ * returns the column's json option (the JSON key to look up), or the
+ * column name if no json option is set.
+ */
 static char *
-getJsonAttname(Form_pg_attribute attr, StringInfo buff)
+getJsonAttname(Form_pg_attribute attr)
 {
     List *    options;
     ListCell *lc;
-    int       cur_start = buff->len == 0 ? 0 : buff->len + 1;
-
-    if (buff->len != 0)
-        appendStringInfoChar(buff, '\0');
 
     options = GetForeignColumnOptions(attr->attrelid, attr->attnum);
     foreach (lc, options)
     {
         DefElem *def = (DefElem *) lfirst(lc);
         if (strcmp(def->defname, "json") == 0)
-        {
-            appendStringInfoString(buff, defGetString(def));
-            return &buff->data[cur_start];
-        }
+            return pstrdup(defGetString(def));
     }
 
-    /* if we are here we did not find a json def so use attname */
-    appendStringInfoString(buff, NameStr(attr->attname));
-
-    return &buff->data[cur_start];
+    /* no json option -> use the column name */
+    return pstrdup(NameStr(attr->attname));
 }
 
 /*
