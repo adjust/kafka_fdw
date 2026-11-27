@@ -1,4 +1,5 @@
 #include "kafka_fdw.h"
+#include "utils/tuplestore.h"
 #include "funcapi.h"
 
 #if PG_VERSION_NUM >= 120000
